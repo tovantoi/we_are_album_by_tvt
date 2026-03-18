@@ -19,7 +19,7 @@ import {
 import { signOut } from "firebase/auth";
 import Swal from "sweetalert2";
 
-// Import thêm icon Download
+// Import thêm icon PlayCircle cho Video
 import {
   LogOut,
   FolderPlus,
@@ -34,6 +34,7 @@ import {
   X,
   Info,
   Download,
+  PlayCircle,
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -48,7 +49,6 @@ export default function Dashboard() {
   const [manageUid, setManageUid] = useState("");
   const [manageRole, setManageRole] = useState("view");
 
-  // State mới: Dùng để chứa ảnh khi người dùng bấm xem to
   const [viewImage, setViewImage] = useState(null);
 
   useEffect(() => {
@@ -196,11 +196,10 @@ export default function Dashboard() {
     }
   };
 
-  // Tính năng tải ảnh về máy
   const handleDownloadPhoto = async (photo) => {
     try {
       Swal.fire({
-        title: "Đang chuẩn bị ảnh...",
+        title: "Đang tải...",
         allowOutsideClick: false,
         didOpen: () => {
           Swal.showLoading();
@@ -211,7 +210,9 @@ export default function Dashboard() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = photo.name || "ky-niem.jpg"; // Tên khi tải về
+      // Đặt đuôi file mặc định tùy theo loại (video mp4, ảnh jpg)
+      const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
+      link.download = (photo.name || "ky-niem") + extension;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -219,7 +220,7 @@ export default function Dashboard() {
       Swal.close();
     } catch (error) {
       Swal.close();
-      window.open(photo.imageUrl, "_blank"); // Phương án dự phòng nếu tải thất bại
+      window.open(photo.imageUrl, "_blank");
     }
   };
 
@@ -229,7 +230,7 @@ export default function Dashboard() {
 
   const handleUploadPhotos = async () => {
     if (!selectedAlbum || imageUploads.length === 0) {
-      Swal.fire("Chú ý", "Vui lòng chọn ảnh trước!", "info");
+      Swal.fire("Chú ý", "Vui lòng chọn tệp trước!", "info");
       return;
     }
     setLoading(true);
@@ -238,11 +239,12 @@ export default function Dashboard() {
         const file = imageUploads[i];
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET CỦA BẠN
+        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET
+
+        // DÙNG CỔNG AUTO ĐỂ NHẬN DIỆN CẢ ẢNH LẪN VIDEO
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/image/upload`,
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
           {
-            // <--- THAY CLOUD NAME CỦA BẠN
             method: "POST",
             body: formData,
           },
@@ -253,17 +255,19 @@ export default function Dashboard() {
             ? `${photoName} - ${i + 1}`
             : photoName
           : file.name;
+
         await addDoc(collection(db, "photos"), {
           imageUrl: data.secure_url,
           albumId: selectedAlbum.id,
           uploaderId: auth.currentUser.uid,
           name: finalName,
+          mediaType: data.resource_type || "image", // Lưu lại xem nó là video hay ảnh
           uploadedAt: serverTimestamp(),
         });
       }
       Swal.fire({
         title: "Thành công!",
-        text: `Đã tải lên ${imageUploads.length} ảnh!`,
+        text: `Đã tải lên ${imageUploads.length} tệp!`,
         icon: "success",
       });
       setImageUploads([]);
@@ -271,7 +275,7 @@ export default function Dashboard() {
       document.getElementById("file-upload").value = "";
       fetchPhotos(selectedAlbum.id);
     } catch (error) {
-      Swal.fire("Lỗi", "Không thể tải ảnh!", "error");
+      Swal.fire("Lỗi", "Không thể tải tệp lên!", "error");
     } finally {
       setLoading(false);
     }
@@ -279,7 +283,7 @@ export default function Dashboard() {
 
   const handleEditPhotoName = async (photo) => {
     const { value: newName } = await Swal.fire({
-      title: "Đổi tên ảnh",
+      title: "Đổi tên kỷ niệm",
       input: "text",
       inputValue: photo.name,
       showCancelButton: true,
@@ -294,7 +298,7 @@ export default function Dashboard() {
 
   const handleDeletePhoto = async (photo) => {
     const result = await Swal.fire({
-      title: "Xóa ảnh này?",
+      title: "Xóa tệp này?",
       icon: "warning",
       showCancelButton: true,
       confirmButtonColor: "#f43f5e",
@@ -304,7 +308,7 @@ export default function Dashboard() {
     if (result.isConfirmed) {
       await deleteDoc(doc(db, "photos", photo.id));
       fetchPhotos(selectedAlbum.id);
-      if (viewImage && viewImage.id === photo.id) setViewImage(null); // Đóng overlay nếu đang xem ảnh đó
+      if (viewImage && viewImage.id === photo.id) setViewImage(null);
     }
   };
 
@@ -314,9 +318,16 @@ export default function Dashboard() {
       : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
   };
 
+  // Hàm kiểm tra xem tệp đó là video hay ảnh
+  const isVideoFile = (photo) => {
+    return (
+      photo.mediaType === "video" ||
+      (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i))
+    );
+  };
+
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
-      {/* HEADER */}
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
         <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center gap-2">
@@ -351,14 +362,13 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-        {/* DANH SÁCH ALBUM */}
         {!selectedAlbum && (
           <div className="space-y-6">
             {role === "admin" && (
-              <div className="bg-white p-5 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
+              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
                 <div className="flex items-center gap-3 mb-4">
                   <FolderPlus className="text-sky-400" />
-                  <h3 className="text-xl font-semibold text-sky-800">
+                  <h3 className="text-lg sm:text-xl font-semibold text-sky-800">
                     Tạo Album Mới
                   </h3>
                 </div>
@@ -368,11 +378,11 @@ export default function Dashboard() {
                     placeholder="Tên Album (VD: Đi biển Nha Trang)"
                     value={newAlbumName}
                     onChange={(e) => setNewAlbumName(e.target.value)}
-                    className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 outline-none"
+                    className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 outline-none text-sm sm:text-base"
                   />
                   <button
                     onClick={handleCreateAlbum}
-                    className="bg-sky-500 text-white p-3 rounded-xl font-medium hover:bg-sky-600 transition flex items-center justify-center gap-2"
+                    className="bg-sky-500 text-white p-3 rounded-xl font-medium hover:bg-sky-600 transition flex items-center justify-center gap-2 text-sm sm:text-base"
                   >
                     <FolderKanban size={18} /> Tạo ngay
                   </button>
@@ -380,125 +390,155 @@ export default function Dashboard() {
               </div>
             )}
 
-            <div className="bg-white p-5 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
-              <h3 className="text-xl font-semibold text-slate-800 mb-5">
+            <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
+              <h3 className="text-lg sm:text-xl font-semibold text-slate-800 mb-4 sm:mb-5">
                 Album Của Bạn
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5">
                 {albums.map((album) => (
                   <div
                     key={album.id}
-                    className="bg-white border-2 border-sky-100 p-5 rounded-2xl hover:border-sky-300 transition group flex flex-col justify-between space-y-4"
+                    className="bg-white border-2 border-sky-100 p-3 sm:p-5 rounded-2xl hover:border-sky-300 transition shadow-sm hover:shadow-md group flex flex-col justify-between space-y-3 sm:space-y-4"
                   >
                     <div>
-                      <h4 className="text-lg font-bold text-sky-900">
+                      <h4
+                        className="text-sm sm:text-lg font-bold text-sky-900 line-clamp-2"
+                        title={album.name}
+                      >
                         {album.name}
                       </h4>
-                      <span className="text-xs text-slate-500">
-                        Tạo ngày:{" "}
+                      <span className="text-[10px] sm:text-xs text-slate-500 block mt-1">
+                        Ngày:{" "}
                         {album.createdAt?.toDate().toLocaleDateString("vi-VN")}
                       </span>
                     </div>
-                    <div className="flex flex-col gap-2 pt-2">
+                    <div className="flex flex-col gap-1.5 sm:gap-2 pt-2 border-t border-sky-50">
                       <button
                         onClick={() => handleSelectAlbum(album)}
-                        className="w-full bg-sky-50 text-sky-600 py-2 rounded-lg font-medium hover:bg-sky-500 hover:text-white transition flex justify-center gap-2 text-sm"
+                        className="w-full bg-sky-50 text-sky-700 py-1.5 sm:py-2 rounded-lg font-medium hover:bg-sky-500 hover:text-white transition flex justify-center items-center gap-1.5 sm:gap-2 text-xs sm:text-sm"
                       >
-                        <Image size={16} /> Xem ảnh
+                        <Image size={14} className="sm:w-4 sm:h-4" />{" "}
+                        <span className="hidden sm:inline">Mở Album</span>
+                        <span className="sm:hidden">Mở</span>
                       </button>
                       {role === "admin" && (
                         <button
                           onClick={() => handleDeleteAlbum(album.id)}
-                          className="w-full text-rose-600 py-2 rounded-lg font-medium hover:bg-rose-100 transition flex justify-center gap-2 text-sm"
+                          className="w-full text-rose-600 bg-rose-50 sm:bg-transparent py-1.5 sm:py-2 rounded-lg font-medium hover:bg-rose-100 transition flex justify-center items-center gap-1.5 sm:gap-2 text-xs sm:text-sm"
                         >
-                          <Trash2 size={16} /> Xóa album
+                          <Trash2 size={14} className="sm:w-4 sm:h-4" />{" "}
+                          <span className="hidden sm:inline">Xóa album</span>
+                          <span className="sm:hidden">Xóa</span>
                         </button>
                       )}
                     </div>
                   </div>
                 ))}
+                {albums.length === 0 && (
+                  <div className="col-span-full py-12 text-center text-slate-500 bg-sky-50 rounded-xl text-sm">
+                    Chưa có album nào.
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* CHI TIẾT ALBUM */}
         {selectedAlbum && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
               <button
                 onClick={() => setSelectedAlbum(null)}
-                className="flex items-center gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-fit hover:bg-sky-200 transition"
+                className="flex items-center justify-center sm:justify-start gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-full sm:w-fit hover:bg-sky-200 transition font-medium"
               >
                 <ChevronLeft size={18} /> Trở về
               </button>
-              <h2 className="text-xl sm:text-2xl font-bold text-sky-950 truncate">
+              <h2 className="text-xl sm:text-2xl font-bold text-sky-950 truncate text-center sm:text-right">
                 Album: {selectedAlbum.name}
               </h2>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              {/* KHU VỰC ẢNH (Cột trái) */}
               <div className="lg:col-span-3 space-y-6 order-last lg:order-first">
                 {canUpload && (
                   <div className="bg-emerald-50 p-4 sm:p-5 rounded-2xl border border-emerald-100 space-y-3">
                     <div className="flex items-center gap-3">
                       <CloudUpload className="text-emerald-500" />
-                      <h4 className="font-semibold text-emerald-900">
-                        Tải ảnh lên
+                      <h4 className="font-semibold text-emerald-900 text-sm sm:text-base">
+                        Thêm Ảnh / Video mới
                       </h4>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3">
+                      {/* INPUT HỖ TRỢ CHỌN NHIỀU CẢ ẢNH LẪN VIDEO */}
                       <input
                         id="file-upload"
                         type="file"
                         multiple
+                        accept="image/*,video/*"
                         onChange={(e) => setImageUploads(e.target.files)}
-                        className="flex-1 text-sm text-emerald-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
+                        className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />
                       <input
                         type="text"
                         placeholder="Tên kỷ niệm (Tùy chọn)"
                         value={photoName}
                         onChange={(e) => setPhotoName(e.target.value)}
-                        className="flex-1 p-2.5 border border-emerald-100 rounded-lg outline-none text-sm"
+                        className="flex-1 p-2 sm:p-2.5 border border-emerald-100 rounded-lg outline-none text-xs sm:text-sm"
                       />
                     </div>
                     <button
                       onClick={handleUploadPhotos}
                       disabled={loading}
-                      className="w-full bg-emerald-500 text-white p-3 rounded-lg font-medium hover:bg-emerald-600 transition disabled:bg-emerald-300"
+                      className="w-full bg-emerald-500 text-white p-2.5 sm:p-3 rounded-lg font-medium hover:bg-emerald-600 transition disabled:bg-emerald-300 text-sm sm:text-base"
                     >
                       {loading ? "Đang xử lý..." : "Bắt đầu tải lên"}
                     </button>
                   </div>
                 )}
 
-                {/* SỬA GIAO DIỆN Ở ĐÂY: Dùng grid-cols-2 cho mobile, giảm padding */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                   {photos.map((photo) => {
                     const canEditThisPhoto =
                       role === "admin" ||
                       (canUpload && photo.uploaderId === auth.currentUser?.uid);
+                    const isVid = isVideoFile(photo);
+
                     return (
                       <div
                         key={photo.id}
                         className="bg-white border border-sky-100 p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition"
                       >
-                        {/* Ảnh: Thêm onClick để mở chế độ xem to (Lightbox) */}
-                        <img
-                          src={photo.imageUrl}
-                          alt={photo.name}
+                        {/* BOX CHỨA ẢNH/VIDEO */}
+                        <div
+                          className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer group bg-black"
                           onClick={() => setViewImage(photo)}
-                          className="w-full h-32 sm:h-48 rounded-xl object-cover cursor-pointer hover:opacity-90 transition"
-                        />
+                        >
+                          {isVid ? (
+                            <video
+                              src={photo.imageUrl}
+                              className="w-full h-full object-cover group-hover:opacity-80 transition"
+                            />
+                          ) : (
+                            <img
+                              src={photo.imageUrl}
+                              alt={photo.name}
+                              className="w-full h-full object-cover group-hover:opacity-90 transition"
+                            />
+                          )}
 
-                        <p className="text-xs sm:text-sm font-semibold text-sky-950 truncate w-full px-1 text-center">
+                          {/* NẾU LÀ VIDEO, HIỂN THỊ NÚT PLAY Ở GIỮA */}
+                          {isVid && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <PlayCircle className="text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="text-xs sm:text-sm font-semibold text-sky-950 truncate w-full px-1 text-center mt-1">
                           {photo.name}
                         </p>
 
-                        <div className="flex gap-1 sm:gap-2 w-full pt-1 border-t border-sky-100">
-                          {/* Nút Tải Về (Luôn hiển thị) */}
+                        <div className="flex gap-1 sm:gap-2 w-full pt-1 border-t border-sky-100 mt-1">
                           <button
                             onClick={() => handleDownloadPhoto(photo)}
                             className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-[10px] sm:text-xs font-medium"
@@ -507,8 +547,6 @@ export default function Dashboard() {
                             <Download size={14} />{" "}
                             <span className="hidden sm:inline">Tải</span>
                           </button>
-
-                          {/* Nút Sửa & Xóa (Chỉ hiện khi có quyền) */}
                           {canEditThisPhoto && (
                             <>
                               <button
@@ -534,46 +572,47 @@ export default function Dashboard() {
                     );
                   })}
                   {photos.length === 0 && (
-                    <div className="col-span-full py-16 text-center text-slate-500 bg-sky-100 rounded-xl">
-                      Chưa có ảnh nào.
+                    <div className="col-span-full py-16 text-center text-slate-500 bg-sky-50 rounded-xl text-sm">
+                      Chưa có kỷ niệm nào ở đây.
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* QUẢN LÝ QUYỀN (Cột phải) */}
               {role === "admin" && (
-                <div className="bg-white p-5 rounded-2xl shadow-lg border border-sky-100 space-y-5 lg:sticky lg:top-24 h-fit">
+                <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-lg border border-sky-100 space-y-4 sm:space-y-5 lg:sticky lg:top-24 h-fit">
                   <div className="flex items-center gap-3 border-b border-sky-100 pb-3">
                     <KeyRound className="text-rose-400" />
-                    <h3 className="font-semibold">Phân Quyền</h3>
+                    <h3 className="font-semibold text-sm sm:text-base">
+                      Phân Quyền
+                    </h3>
                   </div>
-                  <div className="space-y-3 p-4 bg-sky-50 rounded-xl">
+                  <div className="space-y-3 p-3 sm:p-4 bg-sky-50 rounded-xl border border-sky-100">
                     <input
                       type="text"
                       placeholder="UID người dùng"
                       value={manageUid}
                       onChange={(e) => setManageUid(e.target.value)}
-                      className="w-full p-2.5 border rounded-lg text-sm outline-none"
+                      className="w-full p-2 sm:p-2.5 border border-sky-200 rounded-lg text-xs sm:text-sm outline-none"
                     />
                     <select
                       value={manageRole}
                       onChange={(e) => setManageRole(e.target.value)}
-                      className="w-full p-2.5 border rounded-lg text-sm bg-white outline-none"
+                      className="w-full p-2 sm:p-2.5 border border-sky-200 rounded-lg text-xs sm:text-sm bg-white outline-none"
                     >
                       <option value="view">Chỉ Xem (View)</option>
                       <option value="edit">Thêm & Xóa (Edit)</option>
                     </select>
                     <button
                       onClick={handleUpdatePermission}
-                      className="w-full bg-rose-400 text-white p-2.5 rounded-lg text-sm font-medium hover:bg-rose-500"
+                      className="w-full bg-rose-400 text-white p-2 sm:p-2.5 rounded-lg text-xs sm:text-sm font-medium hover:bg-rose-500 transition"
                     >
                       Cấp Quyền
                     </button>
                   </div>
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold">
-                      Danh sách đang có quyền:
+                  <div className="space-y-2 sm:space-y-3">
+                    <h4 className="text-xs sm:text-sm font-semibold text-slate-700">
+                      Danh sách quyền:
                     </h4>
                     <ul className="space-y-2 max-h-48 overflow-y-auto">
                       {selectedAlbum.allowedUsers?.map((uid) => {
@@ -581,24 +620,24 @@ export default function Dashboard() {
                         return (
                           <li
                             key={uid}
-                            className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border gap-2"
+                            className="flex justify-between items-center bg-white p-2 sm:p-2.5 rounded-lg border border-slate-100 shadow-sm gap-2"
                           >
-                            <div className="text-xs truncate">
-                              <span className="font-medium">
+                            <div className="text-[10px] sm:text-xs truncate">
+                              <span className="font-medium text-slate-800">
                                 ID: {uid.substring(0, 8)}
                               </span>
                               <br />
                               <span
-                                className={`px-2 py-0.5 mt-1 rounded-full inline-block ${perm.class}`}
+                                className={`px-2 py-0.5 mt-1 rounded-full inline-block font-medium ${perm.class}`}
                               >
                                 {perm.text}
                               </span>
                             </div>
                             <button
                               onClick={() => handleRemovePermission(uid)}
-                              className="p-1 text-rose-500 hover:bg-rose-100 rounded-lg"
+                              className="p-1 sm:p-1.5 text-rose-500 hover:bg-rose-100 rounded-lg transition"
                             >
-                              <X size={16} />
+                              <X size={14} className="sm:w-4 sm:h-4" />
                             </button>
                           </li>
                         );
@@ -612,40 +651,47 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* COMPONENT XEM ẢNH TO (LIGHTBOX OVERLAY) */}
       {viewImage && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 sm:p-8 backdrop-blur-sm"
-          onClick={() => setViewImage(null)} // Bấm ra ngoài nền đen để đóng
+          onClick={() => setViewImage(null)}
         >
-          {/* Nút đóng ở góc trên */}
           <button
             onClick={() => setViewImage(null)}
-            className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition"
+            className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition z-50"
           >
-            <X size={28} />
+            <X size={24} className="sm:w-7 sm:h-7" />
           </button>
-
-          {/* Nội dung bên trong không bị đóng khi click */}
           <div
             className="relative max-w-5xl w-full flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src={viewImage.imageUrl}
-              alt={viewImage.name}
-              className="w-full h-auto max-h-[75vh] object-contain rounded-lg shadow-2xl"
-            />
+            {/* KIỂM TRA ĐỂ MỞ BỘ PHÁT VIDEO HAY LÀ ẢNH TO */}
+            {isVideoFile(viewImage) ? (
+              <video
+                src={viewImage.imageUrl}
+                controls
+                autoPlay
+                playsInline
+                className="w-full h-auto max-h-[70vh] sm:max-h-[75vh] object-contain rounded-lg shadow-2xl bg-black"
+              />
+            ) : (
+              <img
+                src={viewImage.imageUrl}
+                alt={viewImage.name}
+                className="w-full h-auto max-h-[70vh] sm:max-h-[75vh] object-contain rounded-lg shadow-2xl"
+              />
+            )}
 
-            <div className="mt-6 flex flex-col items-center gap-4">
-              <p className="text-white text-lg sm:text-xl font-medium tracking-wide text-center px-4">
+            <div className="mt-4 sm:mt-6 flex flex-col items-center gap-3 sm:gap-4 w-full px-4">
+              <p className="text-white text-base sm:text-xl font-medium text-center truncate w-full">
                 {viewImage.name}
               </p>
               <button
                 onClick={() => handleDownloadPhoto(viewImage)}
-                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2.5 rounded-full font-medium transition shadow-lg shadow-emerald-500/30"
+                className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 sm:px-6 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-medium transition shadow-lg shadow-emerald-500/30"
               >
-                <Download size={18} /> Tải ảnh này về máy
+                <Download size={16} className="sm:w-5 sm:h-5" /> Tải về máy
               </button>
             </div>
           </div>

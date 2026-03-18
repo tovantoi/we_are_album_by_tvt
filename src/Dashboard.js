@@ -17,9 +17,9 @@ import {
   deleteField,
 } from "firebase/firestore";
 import { signOut } from "firebase/auth";
-import Swal from "sweetalert2"; // Import SweetAlert2
+import Swal from "sweetalert2";
 
-// Import Icons
+// Import thêm icon Download
 import {
   LogOut,
   FolderPlus,
@@ -33,6 +33,7 @@ import {
   KeyRound,
   X,
   Info,
+  Download,
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -47,21 +48,19 @@ export default function Dashboard() {
   const [manageUid, setManageUid] = useState("");
   const [manageRole, setManageRole] = useState("view");
 
+  // State mới: Dùng để chứa ảnh khi người dùng bấm xem to
+  const [viewImage, setViewImage] = useState(null);
+
   useEffect(() => {
     const checkRoleAndFetchData = async () => {
       if (auth.currentUser) {
-        // Kiểm tra trong bảng users
         const userDoc = await getDoc(doc(db, "users", auth.currentUser.uid));
-
-        let currentRole = "user"; // Mặc định ai đăng nhập vào cũng là user thường
-
-        // Nếu có tên trong bảng users (VD: admin) thì lấy quyền đó
+        let currentRole = "user";
         if (userDoc.exists() && userDoc.data().role) {
           currentRole = userDoc.data().role;
         }
-
         setRole(currentRole);
-        fetchAlbums(currentRole); // Bắt buộc gọi hàm tải Album dù là ai
+        fetchAlbums(currentRole);
       }
     };
     checkRoleAndFetchData();
@@ -112,7 +111,7 @@ export default function Dashboard() {
     if (role !== "admin") return;
     const result = await Swal.fire({
       title: "Xóa Album này?",
-      text: "Bạn sẽ không thể khôi phục lại dữ liệu bên trong!",
+      text: "Dữ liệu sẽ không thể khôi phục!",
       icon: "warning",
       showCancelButton: true,
       confirmButtonColor: "#f43f5e",
@@ -120,14 +119,13 @@ export default function Dashboard() {
       confirmButtonText: "Xóa ngay!",
       cancelButtonText: "Hủy",
     });
-
     if (result.isConfirmed) {
       await deleteDoc(doc(db, "albums", albumId));
       Swal.fire({
         title: "Đã xóa!",
-        text: "Album đã được xóa.",
         icon: "success",
-        confirmButtonColor: "#0ea5e9",
+        timer: 1500,
+        showConfirmButton: false,
       });
       fetchAlbums(role);
       setSelectedAlbum(null);
@@ -162,16 +160,16 @@ export default function Dashboard() {
         [`permissions.${manageUid.trim()}`]: manageRole,
       });
       Swal.fire({
-        title: "Cấp quyền thành công!",
-        text: `Đã cấp quyền cho user ${manageUid.substring(0, 6)}...`,
+        title: "Thành công!",
         icon: "success",
-        confirmButtonColor: "#10b981",
+        timer: 1500,
+        showConfirmButton: false,
       });
       setManageUid("");
       const updatedAlbum = await getDoc(albumRef);
       setSelectedAlbum({ id: updatedAlbum.id, ...updatedAlbum.data() });
     } catch (e) {
-      Swal.fire("Lỗi", "Có lỗi xảy ra khi phân quyền", "error");
+      Swal.fire("Lỗi", "Có lỗi xảy ra", "error");
     }
   };
 
@@ -184,24 +182,44 @@ export default function Dashboard() {
       showCancelButton: true,
       confirmButtonColor: "#f43f5e",
       cancelButtonColor: "#94a3b8",
-      confirmButtonText: "Đồng ý khóa",
+      confirmButtonText: "Đồng ý",
       cancelButtonText: "Hủy",
     });
-
     if (result.isConfirmed) {
       const albumRef = doc(db, "albums", selectedAlbum.id);
       await updateDoc(albumRef, {
         allowedUsers: arrayRemove(uidToRemove),
         [`permissions.${uidToRemove}`]: deleteField(),
       });
-      Swal.fire({
-        title: "Đã khóa!",
-        text: "Đã gỡ quyền truy cập.",
-        icon: "success",
-        confirmButtonColor: "#0ea5e9",
-      });
       const updatedAlbum = await getDoc(albumRef);
       setSelectedAlbum({ id: updatedAlbum.id, ...updatedAlbum.data() });
+    }
+  };
+
+  // Tính năng tải ảnh về máy
+  const handleDownloadPhoto = async (photo) => {
+    try {
+      Swal.fire({
+        title: "Đang chuẩn bị ảnh...",
+        allowOutsideClick: false,
+        didOpen: () => {
+          Swal.showLoading();
+        },
+      });
+      const response = await fetch(photo.imageUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = photo.name || "ky-niem.jpg"; // Tên khi tải về
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      Swal.close();
+    } catch (error) {
+      Swal.close();
+      window.open(photo.imageUrl, "_blank"); // Phương án dự phòng nếu tải thất bại
     }
   };
 
@@ -211,11 +229,7 @@ export default function Dashboard() {
 
   const handleUploadPhotos = async () => {
     if (!selectedAlbum || imageUploads.length === 0) {
-      Swal.fire(
-        "Chưa chọn ảnh",
-        "Vui lòng chọn ít nhất 1 bức ảnh để tải lên.",
-        "info",
-      );
+      Swal.fire("Chú ý", "Vui lòng chọn ảnh trước!", "info");
       return;
     }
     setLoading(true);
@@ -248,18 +262,16 @@ export default function Dashboard() {
         });
       }
       Swal.fire({
-        title: "Hoàn tất!",
-        text: `Đã thêm thành công ${imageUploads.length} ảnh!`,
+        title: "Thành công!",
+        text: `Đã tải lên ${imageUploads.length} ảnh!`,
         icon: "success",
-        confirmButtonColor: "#10b981",
       });
       setImageUploads([]);
       setPhotoName("");
-      // Reset input file (trick nhỏ để xóa UI)
       document.getElementById("file-upload").value = "";
       fetchPhotos(selectedAlbum.id);
     } catch (error) {
-      Swal.fire("Lỗi", "Có lỗi khi tải ảnh lên!", "error");
+      Swal.fire("Lỗi", "Không thể tải ảnh!", "error");
     } finally {
       setLoading(false);
     }
@@ -267,50 +279,32 @@ export default function Dashboard() {
 
   const handleEditPhotoName = async (photo) => {
     const { value: newName } = await Swal.fire({
-      title: "Đổi tên kỷ niệm",
+      title: "Đổi tên ảnh",
       input: "text",
-      inputLabel: "Nhập tên mới cho bức ảnh này",
       inputValue: photo.name,
       showCancelButton: true,
       confirmButtonColor: "#0ea5e9",
       cancelButtonColor: "#94a3b8",
-      confirmButtonText: "Lưu thay đổi",
-      cancelButtonText: "Hủy",
     });
-
     if (newName && newName.trim() !== "") {
       await updateDoc(doc(db, "photos", photo.id), { name: newName });
       fetchPhotos(selectedAlbum.id);
-      Swal.fire({
-        title: "Đã đổi tên!",
-        icon: "success",
-        timer: 1500,
-        showConfirmButton: false,
-      });
     }
   };
 
   const handleDeletePhoto = async (photo) => {
     const result = await Swal.fire({
-      title: "Xóa bức ảnh này?",
-      text: "Ảnh sẽ bị xóa vĩnh viễn khỏi album!",
+      title: "Xóa ảnh này?",
       icon: "warning",
       showCancelButton: true,
       confirmButtonColor: "#f43f5e",
       cancelButtonColor: "#94a3b8",
-      confirmButtonText: "Xóa ảnh",
-      cancelButtonText: "Hủy",
+      confirmButtonText: "Xóa ngay",
     });
-
     if (result.isConfirmed) {
       await deleteDoc(doc(db, "photos", photo.id));
       fetchPhotos(selectedAlbum.id);
-      Swal.fire({
-        title: "Đã xóa!",
-        icon: "success",
-        timer: 1500,
-        showConfirmButton: false,
-      });
+      if (viewImage && viewImage.id === photo.id) setViewImage(null); // Đóng overlay nếu đang xem ảnh đó
     }
   };
 
@@ -322,6 +316,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
+      {/* HEADER */}
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
         <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center gap-2">
@@ -356,6 +351,7 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        {/* DANH SÁCH ALBUM */}
         {!selectedAlbum && (
           <div className="space-y-6">
             {role === "admin" && (
@@ -372,7 +368,7 @@ export default function Dashboard() {
                     placeholder="Tên Album (VD: Đi biển Nha Trang)"
                     value={newAlbumName}
                     onChange={(e) => setNewAlbumName(e.target.value)}
-                    className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 focus:border-sky-300 outline-none"
+                    className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 outline-none"
                   />
                   <button
                     onClick={handleCreateAlbum}
@@ -386,16 +382,16 @@ export default function Dashboard() {
 
             <div className="bg-white p-5 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
               <h3 className="text-xl font-semibold text-slate-800 mb-5">
-                Album Kỷ Niệm Của Bạn
+                Album Của Bạn
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
                 {albums.map((album) => (
                   <div
                     key={album.id}
-                    className="bg-white border-2 border-sky-100 p-5 rounded-2xl hover:border-sky-300 transition-all hover:shadow-md group flex flex-col justify-between space-y-4"
+                    className="bg-white border-2 border-sky-100 p-5 rounded-2xl hover:border-sky-300 transition group flex flex-col justify-between space-y-4"
                   >
                     <div>
-                      <h4 className="text-lg font-bold text-sky-900 group-hover:text-sky-600 break-words">
+                      <h4 className="text-lg font-bold text-sky-900">
                         {album.name}
                       </h4>
                       <span className="text-xs text-slate-500">
@@ -406,14 +402,14 @@ export default function Dashboard() {
                     <div className="flex flex-col gap-2 pt-2">
                       <button
                         onClick={() => handleSelectAlbum(album)}
-                        className="w-full bg-sky-50 text-sky-600 py-2 rounded-lg font-medium hover:bg-sky-500 hover:text-white transition flex items-center justify-center gap-2 text-sm"
+                        className="w-full bg-sky-50 text-sky-600 py-2 rounded-lg font-medium hover:bg-sky-500 hover:text-white transition flex justify-center gap-2 text-sm"
                       >
                         <Image size={16} /> Xem ảnh
                       </button>
                       {role === "admin" && (
                         <button
                           onClick={() => handleDeleteAlbum(album.id)}
-                          className="w-full text-rose-600 py-2 rounded-lg font-medium hover:bg-rose-100 transition flex items-center justify-center gap-2 text-sm"
+                          className="w-full text-rose-600 py-2 rounded-lg font-medium hover:bg-rose-100 transition flex justify-center gap-2 text-sm"
                         >
                           <Trash2 size={16} /> Xóa album
                         </button>
@@ -421,69 +417,65 @@ export default function Dashboard() {
                     </div>
                   </div>
                 ))}
-                {albums.length === 0 && (
-                  <div className="sm:col-span-2 lg:col-span-3 xl:col-span-4 text-center py-12 text-slate-500 bg-sky-100 rounded-xl">
-                    Bạn chưa có (hoặc chưa được cấp quyền) Album nào.
-                  </div>
-                )}
               </div>
             </div>
           </div>
         )}
 
+        {/* CHI TIẾT ALBUM */}
         {selectedAlbum && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row gap-4 sm:items-center justify-between">
+            <div className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
               <button
                 onClick={() => setSelectedAlbum(null)}
                 className="flex items-center gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-fit hover:bg-sky-200 transition"
               >
-                <ChevronLeft size={18} /> Quay lại danh sách
+                <ChevronLeft size={18} /> Trở về
               </button>
-              <h2 className="text-2xl font-bold text-sky-950 break-words">
+              <h2 className="text-xl sm:text-2xl font-bold text-sky-950 truncate">
                 Album: {selectedAlbum.name}
               </h2>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+              {/* KHU VỰC ẢNH (Cột trái) */}
               <div className="lg:col-span-3 space-y-6 order-last lg:order-first">
                 {canUpload && (
-                  <div className="bg-emerald-50 p-5 rounded-2xl shadow border border-emerald-100 space-y-3">
+                  <div className="bg-emerald-50 p-4 sm:p-5 rounded-2xl border border-emerald-100 space-y-3">
                     <div className="flex items-center gap-3">
                       <CloudUpload className="text-emerald-500" />
-                      <h4 className="text-lg font-semibold text-emerald-900">
-                        Tải ảnh lên (Có thể chọn nhiều)
+                      <h4 className="font-semibold text-emerald-900">
+                        Tải ảnh lên
                       </h4>
                     </div>
-                    <div className="flex flex-col md:flex-row gap-3">
+                    <div className="flex flex-col sm:flex-row gap-3">
                       <input
                         id="file-upload"
                         type="file"
                         multiple
                         onChange={(e) => setImageUploads(e.target.files)}
-                        className="flex-1 text-sm text-emerald-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-medium file:bg-emerald-100 file:text-emerald-700 hover:file:bg-emerald-200"
+                        className="flex-1 text-sm text-emerald-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />
                       <input
                         type="text"
-                        placeholder="Tên kỷ niệm (Không bắt buộc)"
+                        placeholder="Tên kỷ niệm (Tùy chọn)"
                         value={photoName}
                         onChange={(e) => setPhotoName(e.target.value)}
-                        className="flex-1 p-2.5 border border-emerald-100 rounded-lg focus:ring-1 focus:ring-emerald-200 outline-none text-sm"
+                        className="flex-1 p-2.5 border border-emerald-100 rounded-lg outline-none text-sm"
                       />
                     </div>
                     <button
                       onClick={handleUploadPhotos}
                       disabled={loading}
-                      className="w-full bg-emerald-500 text-white p-3 rounded-lg font-medium hover:bg-emerald-600 transition flex items-center justify-center gap-2 text-sm disabled:bg-emerald-300"
+                      className="w-full bg-emerald-500 text-white p-3 rounded-lg font-medium hover:bg-emerald-600 transition disabled:bg-emerald-300"
                     >
-                      {loading
-                        ? "Đang tải ảnh lên..."
-                        : `Tiến hành tải lên ${imageUploads.length > 0 ? `(${imageUploads.length} ảnh)` : ""}`}
+                      {loading ? "Đang xử lý..." : "Bắt đầu tải lên"}
                     </button>
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {/* SỬA GIAO DIỆN Ở ĐÂY: Dùng grid-cols-2 cho mobile, giảm padding */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                   {photos.map((photo) => {
                     const canEditThisPhoto =
                       role === "admin" ||
@@ -491,116 +483,126 @@ export default function Dashboard() {
                     return (
                       <div
                         key={photo.id}
-                        className="bg-white border border-sky-100 p-3 rounded-2xl flex flex-col items-center gap-3 shadow-sm hover:shadow-lg transition"
+                        className="bg-white border border-sky-100 p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition"
                       >
+                        {/* Ảnh: Thêm onClick để mở chế độ xem to (Lightbox) */}
                         <img
                           src={photo.imageUrl}
                           alt={photo.name}
-                          className="w-full h-48 rounded-xl object-cover"
+                          onClick={() => setViewImage(photo)}
+                          className="w-full h-32 sm:h-48 rounded-xl object-cover cursor-pointer hover:opacity-90 transition"
                         />
-                        <p className="text-sm font-semibold text-sky-950 truncate w-full px-1">
+
+                        <p className="text-xs sm:text-sm font-semibold text-sky-950 truncate w-full px-1 text-center">
                           {photo.name}
                         </p>
 
-                        {canEditThisPhoto && (
-                          <div className="flex gap-2 w-full pt-1 border-t border-sky-100">
-                            <button
-                              onClick={() => handleEditPhotoName(photo)}
-                              className="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition text-xs font-medium"
-                            >
-                              <Edit3 size={14} /> Tên
-                            </button>
-                            <button
-                              onClick={() => handleDeletePhoto(photo)}
-                              className="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition text-xs font-medium"
-                            >
-                              <Trash2 size={14} /> Xóa
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex gap-1 sm:gap-2 w-full pt-1 border-t border-sky-100">
+                          {/* Nút Tải Về (Luôn hiển thị) */}
+                          <button
+                            onClick={() => handleDownloadPhoto(photo)}
+                            className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-[10px] sm:text-xs font-medium"
+                            title="Tải về"
+                          >
+                            <Download size={14} />{" "}
+                            <span className="hidden sm:inline">Tải</span>
+                          </button>
+
+                          {/* Nút Sửa & Xóa (Chỉ hiện khi có quyền) */}
+                          {canEditThisPhoto && (
+                            <>
+                              <button
+                                onClick={() => handleEditPhotoName(photo)}
+                                className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition text-[10px] sm:text-xs font-medium"
+                                title="Đổi tên"
+                              >
+                                <Edit3 size={14} />{" "}
+                                <span className="hidden sm:inline">Tên</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeletePhoto(photo)}
+                                className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition text-[10px] sm:text-xs font-medium"
+                                title="Xóa"
+                              >
+                                <Trash2 size={14} />{" "}
+                                <span className="hidden sm:inline">Xóa</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                   {photos.length === 0 && (
                     <div className="col-span-full py-16 text-center text-slate-500 bg-sky-100 rounded-xl">
-                      Chưa có kỷ niệm nào ở đây.
+                      Chưa có ảnh nào.
                     </div>
                   )}
                 </div>
               </div>
 
+              {/* QUẢN LÝ QUYỀN (Cột phải) */}
               {role === "admin" && (
                 <div className="bg-white p-5 rounded-2xl shadow-lg border border-sky-100 space-y-5 lg:sticky lg:top-24 h-fit">
                   <div className="flex items-center gap-3 border-b border-sky-100 pb-3">
                     <KeyRound className="text-rose-400" />
-                    <h3 className="text-lg font-semibold text-slate-800">
-                      Quản Lý Quyền
-                    </h3>
+                    <h3 className="font-semibold">Phân Quyền</h3>
                   </div>
-
-                  <div className="space-y-3 p-4 bg-sky-50 rounded-xl border border-sky-100">
+                  <div className="space-y-3 p-4 bg-sky-50 rounded-xl">
                     <input
                       type="text"
-                      placeholder="UID tài khoản người thân"
+                      placeholder="UID người dùng"
                       value={manageUid}
                       onChange={(e) => setManageUid(e.target.value)}
-                      className="w-full p-2.5 border border-sky-100 rounded-lg text-sm outline-none focus:ring-1 focus:ring-sky-200"
+                      className="w-full p-2.5 border rounded-lg text-sm outline-none"
                     />
                     <select
                       value={manageRole}
                       onChange={(e) => setManageRole(e.target.value)}
-                      className="w-full p-2.5 border border-sky-100 rounded-lg text-sm outline-none bg-white"
+                      className="w-full p-2.5 border rounded-lg text-sm bg-white outline-none"
                     >
-                      <option value="view">Chỉ được xem (View)</option>
-                      <option value="edit">Được thêm & xóa ảnh (Edit)</option>
+                      <option value="view">Chỉ Xem (View)</option>
+                      <option value="edit">Thêm & Xóa (Edit)</option>
                     </select>
                     <button
                       onClick={handleUpdatePermission}
-                      className="w-full bg-rose-400 text-white p-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition"
+                      className="w-full bg-rose-400 text-white p-2.5 rounded-lg text-sm font-medium hover:bg-rose-500"
                     >
-                      Cấp quyền ngay
+                      Cấp Quyền
                     </button>
                   </div>
-
                   <div className="space-y-3">
-                    <h4 className="font-semibold text-slate-700">
-                      Đang có quyền truy cập (
-                      {selectedAlbum.allowedUsers?.length || 0}):
+                    <h4 className="text-sm font-semibold">
+                      Danh sách đang có quyền:
                     </h4>
-                    <ul className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    <ul className="space-y-2 max-h-48 overflow-y-auto">
                       {selectedAlbum.allowedUsers?.map((uid) => {
                         const perm = getPermissionLabel(uid);
                         return (
                           <li
                             key={uid}
-                            className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100 gap-2"
+                            className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border gap-2"
                           >
-                            <div className="text-xs space-y-1 truncate flex-1">
-                              <span className="font-medium text-slate-800">
-                                ID: {uid.substring(0, 8)}...
+                            <div className="text-xs truncate">
+                              <span className="font-medium">
+                                ID: {uid.substring(0, 8)}
                               </span>
+                              <br />
                               <span
-                                className={`block px-2 py-0.5 rounded-full font-medium w-fit ${perm.class}`}
+                                className={`px-2 py-0.5 mt-1 rounded-full inline-block ${perm.class}`}
                               >
                                 {perm.text}
                               </span>
                             </div>
                             <button
                               onClick={() => handleRemovePermission(uid)}
-                              className="p-1.5 text-rose-500 hover:bg-rose-100 rounded-lg transition"
-                              title="Khóa tài khoản khỏi Album"
+                              className="p-1 text-rose-500 hover:bg-rose-100 rounded-lg"
                             >
-                              <X size={18} />
+                              <X size={16} />
                             </button>
                           </li>
                         );
                       })}
-                      {(!selectedAlbum.allowedUsers ||
-                        selectedAlbum.allowedUsers.length === 0) && (
-                        <span className="text-sm text-slate-500 italic">
-                          Chưa cấp quyền cho ai.
-                        </span>
-                      )}
                     </ul>
                   </div>
                 </div>
@@ -610,9 +612,45 @@ export default function Dashboard() {
         )}
       </main>
 
-      <footer className="py-8 mt-12 border-t border-sky-100 bg-white/50 text-center text-slate-500 text-sm">
-        Hệ thống Album kỷ niệm gia đình &copy; 2026. Phân quyền thông minh.
-      </footer>
+      {/* COMPONENT XEM ẢNH TO (LIGHTBOX OVERLAY) */}
+      {viewImage && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 sm:p-8 backdrop-blur-sm"
+          onClick={() => setViewImage(null)} // Bấm ra ngoài nền đen để đóng
+        >
+          {/* Nút đóng ở góc trên */}
+          <button
+            onClick={() => setViewImage(null)}
+            className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition"
+          >
+            <X size={28} />
+          </button>
+
+          {/* Nội dung bên trong không bị đóng khi click */}
+          <div
+            className="relative max-w-5xl w-full flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={viewImage.imageUrl}
+              alt={viewImage.name}
+              className="w-full h-auto max-h-[75vh] object-contain rounded-lg shadow-2xl"
+            />
+
+            <div className="mt-6 flex flex-col items-center gap-4">
+              <p className="text-white text-lg sm:text-xl font-medium tracking-wide text-center px-4">
+                {viewImage.name}
+              </p>
+              <button
+                onClick={() => handleDownloadPhoto(viewImage)}
+                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2.5 rounded-full font-medium transition shadow-lg shadow-emerald-500/30"
+              >
+                <Download size={18} /> Tải ảnh này về máy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -18,9 +18,10 @@ import {
   setDoc,
   onSnapshot,
 } from "firebase/firestore";
-import { signOut, onAuthStateChanged } from "firebase/auth"; // <--- THÊM onAuthStateChanged
+import { signOut, onAuthStateChanged } from "firebase/auth";
 import Swal from "sweetalert2";
 
+// Import thêm icon FileText cho file tài liệu
 import {
   LogOut,
   FolderPlus,
@@ -37,6 +38,7 @@ import {
   Download,
   PlayCircle,
   Activity,
+  FileText, // <--- THÊM MỚI
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -56,7 +58,7 @@ export default function Dashboard() {
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   const fetchAlbums = async (currentRole) => {
-    if (!auth.currentUser) return; // Bảo vệ hàm
+    if (!auth.currentUser) return;
     let albumsQuery;
     if (currentRole === "admin") {
       albumsQuery = collection(db, "albums");
@@ -72,11 +74,9 @@ export default function Dashboard() {
     );
   };
 
-  // TÍCH HỢP TẤT CẢ VÀO MỘT LISNTENER DUY NHẤT VÀ CHUẨN XÁC
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // 1. Firebase đã xác nhận có người dùng, bắt đầu lấy Role
         let currentRole = "user";
         try {
           const userDoc = await getDoc(doc(db, "users", user.uid));
@@ -90,7 +90,6 @@ export default function Dashboard() {
         setRole(currentRole);
         fetchAlbums(currentRole);
 
-        // 2. Chạy tính năng Heartbeat (Báo Online)
         const updatePresence = async () => {
           try {
             const userRef = doc(db, "users", user.uid);
@@ -107,16 +106,12 @@ export default function Dashboard() {
 
         updatePresence();
         const intervalId = setInterval(updatePresence, 60000);
-
-        // Dọn dẹp interval khi user đăng xuất
         return () => clearInterval(intervalId);
       } else {
-        // Nếu đăng xuất hoặc chưa đăng nhập
         setRole("user");
         setAlbums([]);
       }
     });
-
     return () => unsubscribeAuth();
   }, []);
 
@@ -138,6 +133,16 @@ export default function Dashboard() {
   const onlineUsers = allUsers.filter(
     (u) => u.lastActive && currentTime - u.lastActive < 120000,
   );
+
+  const handleLogout = async () => {
+    if (auth.currentUser) {
+      try {
+        const userRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(userRef, { lastActive: 0 }, { merge: true });
+      } catch (error) {}
+      signOut(auth);
+    }
+  };
 
   const handleCreateAlbum = async () => {
     if (role !== "admin" || !newAlbumName) {
@@ -250,6 +255,12 @@ export default function Dashboard() {
   };
 
   const handleDownloadPhoto = async (photo) => {
+    // Nếu là file tài liệu (raw), đôi khi việc tạo Blob sẽ bị lỗi CORS, nên mở sang tab mới cho an toàn
+    if (isDocumentFile(photo)) {
+      window.open(photo.imageUrl, "_blank");
+      return;
+    }
+
     try {
       Swal.fire({
         title: "Đang tải...",
@@ -264,7 +275,13 @@ export default function Dashboard() {
       const link = document.createElement("a");
       link.href = url;
       const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
-      link.download = (photo.name || "ky-niem") + extension;
+
+      let finalName = photo.name || "ky-niem";
+      if (!finalName.toLowerCase().endsWith(extension)) {
+        finalName += extension;
+      }
+
+      link.download = finalName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -291,10 +308,10 @@ export default function Dashboard() {
         const file = imageUploads[i];
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- THAY BẰNG UPLOAD PRESET NẾU KHÁC
+        formData.append("upload_preset", "react_album");
 
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY CLOUD NAME Ở ĐÂY (VÍ DỤ: vantoi)
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY LẠI CLOUD NAME CỦA BẠN NHÉ
           {
             method: "POST",
             body: formData,
@@ -312,7 +329,7 @@ export default function Dashboard() {
           albumId: selectedAlbum.id,
           uploaderId: auth.currentUser.uid,
           name: finalName,
-          mediaType: data.resource_type || "image",
+          mediaType: data.resource_type || "image", // Cloudinary sẽ gán là 'raw' nếu là file .doc, .pdf
           uploadedAt: serverTimestamp(),
         });
       }
@@ -325,7 +342,6 @@ export default function Dashboard() {
       setPhotoName("");
       document.getElementById("file-upload").value = "";
 
-      // Load lại ảnh thủ công cho album đó
       const photosQuery = query(
         collection(db, "photos"),
         where("albumId", "==", selectedAlbum.id),
@@ -335,7 +351,11 @@ export default function Dashboard() {
         photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
       );
     } catch (error) {
-      Swal.fire("Lỗi", "Không thể tải tệp lên!", "error");
+      Swal.fire(
+        "Lỗi",
+        "Không thể tải tệp lên! Hãy kiểm tra cài đặt Upload Presets trên Cloudinary.",
+        "error",
+      );
     } finally {
       setLoading(false);
     }
@@ -343,7 +363,7 @@ export default function Dashboard() {
 
   const handleEditPhotoName = async (photo) => {
     const { value: newName } = await Swal.fire({
-      title: "Đổi tên kỷ niệm",
+      title: "Đổi tên tệp",
       input: "text",
       inputValue: photo.name,
       showCancelButton: true,
@@ -392,26 +412,24 @@ export default function Dashboard() {
       : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
   };
 
+  // --- HÀM KIỂM TRA ĐỊNH DẠNG FILE ---
   const isVideoFile = (photo) => {
     return (
       photo.mediaType === "video" ||
       (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i))
     );
   };
-  // --- THÊM HÀM NÀY NGAY TRÊN DÒNG return ( ---
-  const handleLogout = async () => {
-    if (auth.currentUser) {
-      try {
-        // Gửi tín hiệu "Tắt đèn" lập tức lên Firebase trước khi thoát
-        const userRef = doc(db, "users", auth.currentUser.uid);
-        await setDoc(userRef, { lastActive: 0 }, { merge: true });
-      } catch (error) {
-        console.error("Lỗi khi tắt trạng thái online:", error);
-      }
-      // Sau đó mới đăng xuất
-      signOut(auth);
-    }
+
+  const isDocumentFile = (photo) => {
+    return (
+      photo.mediaType === "raw" || // Cloudinary nhận dạng file tài liệu là raw
+      (photo.imageUrl &&
+        photo.imageUrl.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i)) ||
+      (photo.name && photo.name.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i))
+    );
   };
+  // -------------------------------------
+
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
@@ -437,7 +455,7 @@ export default function Dashboard() {
             </span>
             <span className="md:hidden font-medium">Chào bạn</span>
             <button
-              onClick={handleLogout} // <--- CHỈ SỬA ĐÚNG CHỖ NÀY
+              onClick={handleLogout}
               className="flex items-center gap-2 bg-white text-rose-600 px-4 py-2 rounded-full shadow hover:bg-rose-50 transition"
             >
               <LogOut size={16} />{" "}
@@ -582,21 +600,22 @@ export default function Dashboard() {
                     <div className="flex items-center gap-3">
                       <CloudUpload className="text-emerald-500" />
                       <h4 className="font-semibold text-emerald-900 text-sm sm:text-base">
-                        Thêm Ảnh / Video mới
+                        Thêm Tệp mới (Ảnh/Video/Tài liệu)
                       </h4>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3">
+                      {/* BỔ SUNG ĐỊNH DẠNG TÀI LIỆU VÀO INPUT */}
                       <input
                         id="file-upload"
                         type="file"
                         multiple
-                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi"
+                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi, .pdf, .doc, .docx, .xls, .xlsx, .txt"
                         onChange={(e) => setImageUploads(e.target.files)}
                         className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />
                       <input
                         type="text"
-                        placeholder="Tên kỷ niệm (Tùy chọn)"
+                        placeholder="Tên tệp (Tùy chọn)"
                         value={photoName}
                         onChange={(e) => setPhotoName(e.target.value)}
                         className="flex-1 p-2 sm:p-2.5 border border-emerald-100 rounded-lg outline-none text-xs sm:text-sm"
@@ -618,37 +637,51 @@ export default function Dashboard() {
                       role === "admin" ||
                       (canUpload && photo.uploaderId === auth.currentUser?.uid);
                     const isVid = isVideoFile(photo);
+                    const isDoc = isDocumentFile(photo); // Kích hoạt kiểm tra tài liệu
 
                     return (
                       <div
                         key={photo.id}
                         className="bg-white border border-sky-100 p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition"
                       >
+                        {/* BOX CHỨA ẢNH / VIDEO / TÀI LIỆU */}
                         <div
-                          className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer group bg-black"
+                          className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer group bg-slate-100"
                           onClick={() => setViewImage(photo)}
                         >
-                          {isVid ? (
-                            <video
-                              src={photo.imageUrl}
-                              className="w-full h-full object-cover group-hover:opacity-80 transition"
-                            />
+                          {isDoc ? (
+                            // NẾU LÀ TÀI LIỆU (.DOC, .PDF)
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-sky-50 text-sky-600 group-hover:bg-sky-100 transition">
+                              <FileText size={48} className="mb-2 opacity-80" />
+                              <span className="text-xs font-semibold px-2 text-center text-sky-800 line-clamp-2">
+                                {photo.name}
+                              </span>
+                            </div>
+                          ) : isVid ? (
+                            // NẾU LÀ VIDEO
+                            <>
+                              <video
+                                src={photo.imageUrl}
+                                className="w-full h-full object-cover group-hover:opacity-80 transition bg-black"
+                              />
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <PlayCircle className="text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
+                              </div>
+                            </>
                           ) : (
+                            // NẾU LÀ ẢNH
                             <img
                               src={photo.imageUrl}
                               alt={photo.name}
-                              className="w-full h-full object-cover group-hover:opacity-90 transition"
+                              className="w-full h-full object-cover group-hover:opacity-90 transition bg-black"
                             />
-                          )}
-
-                          {isVid && (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                              <PlayCircle className="text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
-                            </div>
                           )}
                         </div>
 
-                        <p className="text-xs sm:text-sm font-semibold text-sky-950 truncate w-full px-1 text-center mt-1">
+                        <p
+                          className="text-xs sm:text-sm font-semibold text-sky-950 truncate w-full px-1 text-center mt-1"
+                          title={photo.name}
+                        >
                           {photo.name}
                         </p>
 
@@ -656,10 +689,12 @@ export default function Dashboard() {
                           <button
                             onClick={() => handleDownloadPhoto(photo)}
                             className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-[10px] sm:text-xs font-medium"
-                            title="Tải về"
+                            title={isDoc ? "Mở/Tải tài liệu" : "Tải về"}
                           >
                             <Download size={14} />{" "}
-                            <span className="hidden sm:inline">Tải</span>
+                            <span className="hidden sm:inline">
+                              {isDoc ? "Mở file" : "Tải"}
+                            </span>
                           </button>
                           {canEditThisPhoto && (
                             <>
@@ -687,7 +722,7 @@ export default function Dashboard() {
                   })}
                   {photos.length === 0 && (
                     <div className="col-span-full py-16 text-center text-slate-500 bg-sky-50 rounded-xl text-sm">
-                      Chưa có kỷ niệm nào ở đây.
+                      Chưa có tệp nào ở đây.
                     </div>
                   )}
                 </div>
@@ -765,6 +800,7 @@ export default function Dashboard() {
         )}
       </main>
 
+      {/* LIGHTBOX XEM TO */}
       {viewImage && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 sm:p-8 backdrop-blur-sm"
@@ -780,7 +816,25 @@ export default function Dashboard() {
             className="relative max-w-5xl w-full flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
-            {isVideoFile(viewImage) ? (
+            {/* KIỂM TRA ĐỂ MỞ TÀI LIỆU, VIDEO HAY ẢNH */}
+            {isDocumentFile(viewImage) ? (
+              <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl flex flex-col items-center justify-center p-8 text-center">
+                <FileText size={80} className="text-sky-500 mb-6" />
+                <h3 className="text-xl font-bold text-slate-800 mb-3">
+                  {viewImage.name}
+                </h3>
+                <p className="text-sm text-slate-500 mb-8">
+                  Trình duyệt không hỗ trợ xem trước tệp tài liệu này. Vui lòng
+                  bấm mở tệp để xem chi tiết.
+                </p>
+                <button
+                  onClick={() => handleDownloadPhoto(viewImage)}
+                  className="bg-sky-500 hover:bg-sky-600 text-white px-8 py-3 rounded-full font-medium transition shadow-lg shadow-sky-500/30 w-full sm:w-auto"
+                >
+                  Mở / Tải Tệp Về Máy
+                </button>
+              </div>
+            ) : isVideoFile(viewImage) ? (
               <video
                 src={viewImage.imageUrl}
                 controls
@@ -796,17 +850,19 @@ export default function Dashboard() {
               />
             )}
 
-            <div className="mt-4 sm:mt-6 flex flex-col items-center gap-3 sm:gap-4 w-full px-4">
-              <p className="text-white text-base sm:text-xl font-medium text-center truncate w-full">
-                {viewImage.name}
-              </p>
-              <button
-                onClick={() => handleDownloadPhoto(viewImage)}
-                className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 sm:px-6 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-medium transition shadow-lg shadow-emerald-500/30"
-              >
-                <Download size={16} className="sm:w-5 sm:h-5" /> Tải về máy
-              </button>
-            </div>
+            {!isDocumentFile(viewImage) && (
+              <div className="mt-4 sm:mt-6 flex flex-col items-center gap-3 sm:gap-4 w-full px-4">
+                <p className="text-white text-base sm:text-xl font-medium text-center truncate w-full">
+                  {viewImage.name}
+                </p>
+                <button
+                  onClick={() => handleDownloadPhoto(viewImage)}
+                  className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 sm:px-6 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-medium transition shadow-lg shadow-emerald-500/30"
+                >
+                  <Download size={16} className="sm:w-5 sm:h-5" /> Tải về máy
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

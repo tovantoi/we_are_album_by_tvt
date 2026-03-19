@@ -15,11 +15,13 @@ import {
   arrayUnion,
   arrayRemove,
   deleteField,
+  setDoc, // <--- THÊM MỚI
+  onSnapshot, // <--- THÊM MỚI
 } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import Swal from "sweetalert2";
 
-// Import thêm icon PlayCircle cho Video
+// Import thêm icon Activity
 import {
   LogOut,
   FolderPlus,
@@ -35,6 +37,7 @@ import {
   Info,
   Download,
   PlayCircle,
+  Activity, // <--- THÊM MỚI
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -51,6 +54,10 @@ export default function Dashboard() {
 
   const [viewImage, setViewImage] = useState(null);
 
+  // State mới cho tính năng Online
+  const [allUsers, setAllUsers] = useState([]);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
   useEffect(() => {
     const checkRoleAndFetchData = async () => {
       if (auth.currentUser) {
@@ -65,6 +72,57 @@ export default function Dashboard() {
     };
     checkRoleAndFetchData();
   }, []);
+
+  // 1. Tính năng gửi tín hiệu "Đang Online" (Ping mỗi 60 giây)
+  useEffect(() => {
+    let presenceInterval;
+    if (auth.currentUser) {
+      const updatePresence = async () => {
+        try {
+          const userRef = doc(db, "users", auth.currentUser.uid);
+          // Dùng setDoc với merge: true để tạo mới nếu chưa có, hoặc cập nhật nếu đã có
+          await setDoc(
+            userRef,
+            {
+              email: auth.currentUser.email,
+              lastActive: Date.now(),
+            },
+            { merge: true },
+          );
+        } catch (error) {
+          console.log("Lỗi cập nhật online:", error);
+        }
+      };
+
+      updatePresence(); // Chạy ngay khi mở web
+      presenceInterval = setInterval(updatePresence, 60000); // Lặp lại mỗi 60s
+    }
+    return () => {
+      if (presenceInterval) clearInterval(presenceInterval);
+    };
+  }, []);
+
+  // 2. Admin lắng nghe danh sách Users realtime
+  useEffect(() => {
+    if (role === "admin") {
+      const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+        const usersData = snapshot.docs.map((doc) => doc.data());
+        setAllUsers(usersData);
+      });
+      return () => unsubscribe();
+    }
+  }, [role]);
+
+  // 3. Cập nhật đồng hồ để lọc người dùng (Ping mỗi 30 giây)
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Lọc ra những ai có lastActive trong vòng 2 phút (120,000 ms)
+  const onlineUsers = allUsers.filter(
+    (u) => u.lastActive && currentTime - u.lastActive < 120000,
+  );
 
   const fetchAlbums = async (currentRole) => {
     let albumsQuery;
@@ -210,7 +268,6 @@ export default function Dashboard() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      // Đặt đuôi file mặc định tùy theo loại (video mp4, ảnh jpg)
       const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
       link.download = (photo.name || "ky-niem") + extension;
       document.body.appendChild(link);
@@ -239,11 +296,10 @@ export default function Dashboard() {
         const file = imageUploads[i];
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET
+        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET NẾU CẦN
 
-        // DÙNG CỔNG AUTO ĐỂ NHẬN DIỆN CẢ ẢNH LẪN VIDEO
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- ĐỔI LẠI CLOUD NAME CỦA BẠN (VD: vantoi)
           {
             method: "POST",
             body: formData,
@@ -261,7 +317,7 @@ export default function Dashboard() {
           albumId: selectedAlbum.id,
           uploaderId: auth.currentUser.uid,
           name: finalName,
-          mediaType: data.resource_type || "image", // Lưu lại xem nó là video hay ảnh
+          mediaType: data.resource_type || "image",
           uploadedAt: serverTimestamp(),
         });
       }
@@ -318,7 +374,6 @@ export default function Dashboard() {
       : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
   };
 
-  // Hàm kiểm tra xem tệp đó là video hay ảnh
   const isVideoFile = (photo) => {
     return (
       photo.mediaType === "video" ||
@@ -364,28 +419,63 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
         {!selectedAlbum && (
           <div className="space-y-6">
+            {/* GIAO DIỆN ADMIN MỚI: TẠO ALBUM VÀ THỐNG KÊ ONLINE */}
             {role === "admin" && (
-              <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-sky-100">
-                <div className="flex items-center gap-3 mb-4">
-                  <FolderPlus className="text-sky-400" />
-                  <h3 className="text-lg sm:text-xl font-semibold text-sky-800">
-                    Tạo Album Mới
-                  </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* BOX TẠO ALBUM */}
+                <div className="lg:col-span-2 bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-sky-100 flex flex-col justify-center">
+                  <div className="flex items-center gap-3 mb-4">
+                    <FolderPlus className="text-sky-400" />
+                    <h3 className="text-lg sm:text-xl font-semibold text-sky-800">
+                      Tạo Album Mới
+                    </h3>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <input
+                      type="text"
+                      placeholder="Tên Album (VD: Đi biển Nha Trang)"
+                      value={newAlbumName}
+                      onChange={(e) => setNewAlbumName(e.target.value)}
+                      className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 outline-none text-sm sm:text-base"
+                    />
+                    <button
+                      onClick={handleCreateAlbum}
+                      className="bg-sky-500 text-white p-3 rounded-xl font-medium hover:bg-sky-600 transition flex items-center justify-center gap-2 text-sm sm:text-base"
+                    >
+                      <FolderKanban size={18} /> Tạo ngay
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Tên Album (VD: Đi biển Nha Trang)"
-                    value={newAlbumName}
-                    onChange={(e) => setNewAlbumName(e.target.value)}
-                    className="md:col-span-3 p-3 border border-sky-100 rounded-xl focus:ring-2 focus:ring-sky-200 outline-none text-sm sm:text-base"
-                  />
-                  <button
-                    onClick={handleCreateAlbum}
-                    className="bg-sky-500 text-white p-3 rounded-xl font-medium hover:bg-sky-600 transition flex items-center justify-center gap-2 text-sm sm:text-base"
-                  >
-                    <FolderKanban size={18} /> Tạo ngay
-                  </button>
+
+                {/* BOX THỐNG KÊ ONLINE */}
+                <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-emerald-100 flex flex-col">
+                  <div className="flex items-center gap-3 mb-4">
+                    <Activity className="text-emerald-500" />
+                    <h3 className="text-lg font-semibold text-emerald-800">
+                      Đang Online ({onlineUsers.length})
+                    </h3>
+                  </div>
+                  <div className="flex-1 bg-emerald-50/50 rounded-xl p-3 border border-emerald-50 overflow-y-auto max-h-32">
+                    <ul className="space-y-3">
+                      {onlineUsers.map((u, i) => (
+                        <li key={i} className="flex items-center gap-3 text-sm">
+                          {/* Chấm xanh nhấp nháy hiệu ứng radar */}
+                          <span className="relative flex h-3 w-3">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                          </span>
+                          <span className="truncate font-medium text-emerald-900">
+                            {u.email}
+                          </span>
+                        </li>
+                      ))}
+                      {onlineUsers.length === 0 && (
+                        <div className="text-sm text-emerald-700/60 italic text-center mt-2">
+                          Không có ai online
+                        </div>
+                      )}
+                    </ul>
+                  </div>
                 </div>
               </div>
             )}
@@ -469,12 +559,11 @@ export default function Dashboard() {
                       </h4>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3">
-                      {/* INPUT HỖ TRỢ CHỌN NHIỀU CẢ ẢNH LẪN VIDEO */}
                       <input
                         id="file-upload"
                         type="file"
                         multiple
-                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi" // <--- ĐÃ SỬA CHỖ NÀY
+                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi"
                         onChange={(e) => setImageUploads(e.target.files)}
                         className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />
@@ -508,7 +597,6 @@ export default function Dashboard() {
                         key={photo.id}
                         className="bg-white border border-sky-100 p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition"
                       >
-                        {/* BOX CHỨA ẢNH/VIDEO */}
                         <div
                           className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer group bg-black"
                           onClick={() => setViewImage(photo)}
@@ -526,7 +614,6 @@ export default function Dashboard() {
                             />
                           )}
 
-                          {/* NẾU LÀ VIDEO, HIỂN THỊ NÚT PLAY Ở GIỮA */}
                           {isVid && (
                             <div className="absolute inset-0 flex items-center justify-center">
                               <PlayCircle className="text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
@@ -666,7 +753,6 @@ export default function Dashboard() {
             className="relative max-w-5xl w-full flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* KIỂM TRA ĐỂ MỞ BỘ PHÁT VIDEO HAY LÀ ẢNH TO */}
             {isVideoFile(viewImage) ? (
               <video
                 src={viewImage.imageUrl}

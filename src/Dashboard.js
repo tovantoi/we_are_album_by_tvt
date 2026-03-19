@@ -398,7 +398,20 @@ export default function Dashboard() {
       (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i))
     );
   };
-
+  // --- THÊM HÀM NÀY NGAY TRÊN DÒNG return ( ---
+  const handleLogout = async () => {
+    if (auth.currentUser) {
+      try {
+        // Gửi tín hiệu "Tắt đèn" lập tức lên Firebase trước khi thoát
+        const userRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(userRef, { lastActive: 0 }, { merge: true });
+      } catch (error) {
+        console.error("Lỗi khi tắt trạng thái online:", error);
+      }
+      // Sau đó mới đăng xuất
+      signOut(auth);
+    }
+  };
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
@@ -424,7 +437,7 @@ export default function Dashboard() {
             </span>
             <span className="md:hidden font-medium">Chào bạn</span>
             <button
-              onClick={() => signOut(auth)}
+              onClick={handleLogout} // <--- CHỈ SỬA ĐÚNG CHỖ NÀY
               className="flex items-center gap-2 bg-white text-rose-600 px-4 py-2 rounded-full shadow hover:bg-rose-50 transition"
             >
               <LogOut size={16} />{" "}

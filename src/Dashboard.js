@@ -15,13 +15,12 @@ import {
   arrayUnion,
   arrayRemove,
   deleteField,
-  setDoc, // <--- THÊM MỚI
-  onSnapshot, // <--- THÊM MỚI
+  setDoc,
+  onSnapshot,
 } from "firebase/firestore";
-import { signOut } from "firebase/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth"; // <--- THÊM onAuthStateChanged
 import Swal from "sweetalert2";
 
-// Import thêm icon Activity
 import {
   LogOut,
   FolderPlus,
@@ -37,7 +36,7 @@ import {
   Info,
   Download,
   PlayCircle,
-  Activity, // <--- THÊM MỚI
+  Activity,
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -53,78 +52,11 @@ export default function Dashboard() {
   const [manageRole, setManageRole] = useState("view");
 
   const [viewImage, setViewImage] = useState(null);
-
-  // State mới cho tính năng Online
   const [allUsers, setAllUsers] = useState([]);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  useEffect(() => {
-    const checkRoleAndFetchData = async () => {
-      if (auth.currentUser) {
-        const userDoc = await getDoc(doc(db, "users", auth.currentUser.uid));
-        let currentRole = "user";
-        if (userDoc.exists() && userDoc.data().role) {
-          currentRole = userDoc.data().role;
-        }
-        setRole(currentRole);
-        fetchAlbums(currentRole);
-      }
-    };
-    checkRoleAndFetchData();
-  }, []);
-
-  // 1. Tính năng gửi tín hiệu "Đang Online" (Ping mỗi 60 giây)
-  useEffect(() => {
-    let presenceInterval;
-    if (auth.currentUser) {
-      const updatePresence = async () => {
-        try {
-          const userRef = doc(db, "users", auth.currentUser.uid);
-          // Dùng setDoc với merge: true để tạo mới nếu chưa có, hoặc cập nhật nếu đã có
-          await setDoc(
-            userRef,
-            {
-              email: auth.currentUser.email,
-              lastActive: Date.now(),
-            },
-            { merge: true },
-          );
-        } catch (error) {
-          console.log("Lỗi cập nhật online:", error);
-        }
-      };
-
-      updatePresence(); // Chạy ngay khi mở web
-      presenceInterval = setInterval(updatePresence, 60000); // Lặp lại mỗi 60s
-    }
-    return () => {
-      if (presenceInterval) clearInterval(presenceInterval);
-    };
-  }, []);
-
-  // 2. Admin lắng nghe danh sách Users realtime
-  useEffect(() => {
-    if (role === "admin") {
-      const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
-        const usersData = snapshot.docs.map((doc) => doc.data());
-        setAllUsers(usersData);
-      });
-      return () => unsubscribe();
-    }
-  }, [role]);
-
-  // 3. Cập nhật đồng hồ để lọc người dùng (Ping mỗi 30 giây)
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(Date.now()), 30000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Lọc ra những ai có lastActive trong vòng 2 phút (120,000 ms)
-  const onlineUsers = allUsers.filter(
-    (u) => u.lastActive && currentTime - u.lastActive < 120000,
-  );
-
   const fetchAlbums = async (currentRole) => {
+    if (!auth.currentUser) return; // Bảo vệ hàm
     let albumsQuery;
     if (currentRole === "admin") {
       albumsQuery = collection(db, "albums");
@@ -139,6 +71,73 @@ export default function Dashboard() {
       albumsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
     );
   };
+
+  // TÍCH HỢP TẤT CẢ VÀO MỘT LISNTENER DUY NHẤT VÀ CHUẨN XÁC
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        // 1. Firebase đã xác nhận có người dùng, bắt đầu lấy Role
+        let currentRole = "user";
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          if (userDoc.exists() && userDoc.data().role) {
+            currentRole = userDoc.data().role;
+          }
+        } catch (error) {
+          console.error("Lỗi lấy quyền:", error);
+        }
+
+        setRole(currentRole);
+        fetchAlbums(currentRole);
+
+        // 2. Chạy tính năng Heartbeat (Báo Online)
+        const updatePresence = async () => {
+          try {
+            const userRef = doc(db, "users", user.uid);
+            await setDoc(
+              userRef,
+              {
+                email: user.email,
+                lastActive: Date.now(),
+              },
+              { merge: true },
+            );
+          } catch (error) {}
+        };
+
+        updatePresence();
+        const intervalId = setInterval(updatePresence, 60000);
+
+        // Dọn dẹp interval khi user đăng xuất
+        return () => clearInterval(intervalId);
+      } else {
+        // Nếu đăng xuất hoặc chưa đăng nhập
+        setRole("user");
+        setAlbums([]);
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
+    if (role === "admin") {
+      const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+        const usersData = snapshot.docs.map((doc) => doc.data());
+        setAllUsers(usersData);
+      });
+      return () => unsubscribe();
+    }
+  }, [role]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const onlineUsers = allUsers.filter(
+    (u) => u.lastActive && currentTime - u.lastActive < 120000,
+  );
 
   const handleCreateAlbum = async () => {
     if (role !== "admin" || !newAlbumName) {
@@ -192,13 +191,9 @@ export default function Dashboard() {
 
   const handleSelectAlbum = async (album) => {
     setSelectedAlbum(album);
-    fetchPhotos(album.id);
-  };
-
-  const fetchPhotos = async (albumId) => {
     const photosQuery = query(
       collection(db, "photos"),
-      where("albumId", "==", albumId),
+      where("albumId", "==", album.id),
     );
     const photosSnapshot = await getDocs(photosQuery);
     setPhotos(
@@ -296,10 +291,10 @@ export default function Dashboard() {
         const file = imageUploads[i];
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET NẾU CẦN
+        formData.append("upload_preset", "react_album"); // <--- THAY BẰNG UPLOAD PRESET NẾU KHÁC
 
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- ĐỔI LẠI CLOUD NAME CỦA BẠN (VD: vantoi)
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY CLOUD NAME Ở ĐÂY (VÍ DỤ: vantoi)
           {
             method: "POST",
             body: formData,
@@ -329,7 +324,16 @@ export default function Dashboard() {
       setImageUploads([]);
       setPhotoName("");
       document.getElementById("file-upload").value = "";
-      fetchPhotos(selectedAlbum.id);
+
+      // Load lại ảnh thủ công cho album đó
+      const photosQuery = query(
+        collection(db, "photos"),
+        where("albumId", "==", selectedAlbum.id),
+      );
+      const photosSnapshot = await getDocs(photosQuery);
+      setPhotos(
+        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+      );
     } catch (error) {
       Swal.fire("Lỗi", "Không thể tải tệp lên!", "error");
     } finally {
@@ -348,7 +352,14 @@ export default function Dashboard() {
     });
     if (newName && newName.trim() !== "") {
       await updateDoc(doc(db, "photos", photo.id), { name: newName });
-      fetchPhotos(selectedAlbum.id);
+      const photosQuery = query(
+        collection(db, "photos"),
+        where("albumId", "==", selectedAlbum.id),
+      );
+      const photosSnapshot = await getDocs(photosQuery);
+      setPhotos(
+        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+      );
     }
   };
 
@@ -363,7 +374,14 @@ export default function Dashboard() {
     });
     if (result.isConfirmed) {
       await deleteDoc(doc(db, "photos", photo.id));
-      fetchPhotos(selectedAlbum.id);
+      const photosQuery = query(
+        collection(db, "photos"),
+        where("albumId", "==", selectedAlbum.id),
+      );
+      const photosSnapshot = await getDocs(photosQuery);
+      setPhotos(
+        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+      );
       if (viewImage && viewImage.id === photo.id) setViewImage(null);
     }
   };
@@ -419,10 +437,8 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
         {!selectedAlbum && (
           <div className="space-y-6">
-            {/* GIAO DIỆN ADMIN MỚI: TẠO ALBUM VÀ THỐNG KÊ ONLINE */}
             {role === "admin" && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* BOX TẠO ALBUM */}
                 <div className="lg:col-span-2 bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-sky-100 flex flex-col justify-center">
                   <div className="flex items-center gap-3 mb-4">
                     <FolderPlus className="text-sky-400" />
@@ -447,7 +463,6 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* BOX THỐNG KÊ ONLINE */}
                 <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border border-emerald-100 flex flex-col">
                   <div className="flex items-center gap-3 mb-4">
                     <Activity className="text-emerald-500" />
@@ -459,7 +474,6 @@ export default function Dashboard() {
                     <ul className="space-y-3">
                       {onlineUsers.map((u, i) => (
                         <li key={i} className="flex items-center gap-3 text-sm">
-                          {/* Chấm xanh nhấp nháy hiệu ứng radar */}
                           <span className="relative flex h-3 w-3">
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>

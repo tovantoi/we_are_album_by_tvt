@@ -1,5 +1,6 @@
 // src/Dashboard.js
 import React, { useState, useEffect } from "react";
+import imageCompression from "browser-image-compression";
 import { auth, db } from "./firebase";
 import {
   collection,
@@ -308,35 +309,52 @@ export default function Dashboard() {
 
     try {
       for (let i = 0; i < imageUploads.length; i++) {
-        const file = imageUploads[i];
+        let file = imageUploads[i]; // Đổi từ const sang let để có thể ghi đè file nén
 
-        // --- THÊM BỘ KIỂM TRA DUNG LƯỢNG THÔNG MINH ---
+        const isImage = file.type.startsWith("image/");
         const isVideo = file.type.startsWith("video/");
+
+        // --- BỘ NÉN ẢNH THÔNG MINH ---
+        // Nếu là ảnh và nặng trên 8MB thì nén ngay lập tức
+        if (isImage && file.size > 8 * 1024 * 1024) {
+          const options = {
+            maxSizeMB: 8, // Ép dung lượng xuống dưới 8MB
+            maxWidthOrHeight: 3000, // Giữ độ nét cao
+            useWebWorker: true, // Nén mượt mà không đơ máy
+          };
+          try {
+            file = await imageCompression(file, options);
+          } catch (error) {
+            console.error("Lỗi nén ảnh:", error);
+          }
+        }
+        // ----------------------------------------------
+
+        // Kiểm tra lại dung lượng sau khi nén (hoặc kiểm tra video gốc)
         const maxSize = isVideo ? 100 * 1024 * 1024 : 10 * 1024 * 1024; // Video 100MB, Ảnh/Tài liệu 10MB
 
         if (file.size > maxSize) {
           await Swal.fire(
             "Tệp quá nặng!",
-            `Tệp "${file.name}" nặng hơn mức cho phép (Ảnh <10MB, Video <100MB). Hệ thống sẽ bỏ qua tệp này.`,
+            `Tệp "${file.name}" (dù đã nén) vẫn nặng hơn mức cho phép (Ảnh <10MB, Video <100MB). Hệ thống sẽ bỏ qua tệp này.`,
             "warning",
           );
           continue; // Bỏ qua file này, tiếp tục tải các file khác
         }
-        // ----------------------------------------------
 
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- NHỚ ĐỔI NẾU KHÁC
+        formData.append("upload_preset", "react_album");
 
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY LẠI CLOUD NAME CỦA BẠN
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
           {
             method: "POST",
             body: formData,
           },
         );
 
-        // Nếu Cloudinary trả về lỗi (ví dụ định dạng không hỗ trợ)
+        // Nếu Cloudinary trả về lỗi
         if (!res.ok) {
           console.error("Lỗi từ Cloudinary:", await res.text());
           continue;

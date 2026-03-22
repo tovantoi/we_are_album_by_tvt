@@ -303,20 +303,45 @@ export default function Dashboard() {
       return;
     }
     setLoading(true);
+
+    let successCount = 0; // Đếm số file tải thành công
+
     try {
       for (let i = 0; i < imageUploads.length; i++) {
         const file = imageUploads[i];
+
+        // --- THÊM BỘ KIỂM TRA DUNG LƯỢNG THÔNG MINH ---
+        const isVideo = file.type.startsWith("video/");
+        const maxSize = isVideo ? 100 * 1024 * 1024 : 10 * 1024 * 1024; // Video 100MB, Ảnh/Tài liệu 10MB
+
+        if (file.size > maxSize) {
+          await Swal.fire(
+            "Tệp quá nặng!",
+            `Tệp "${file.name}" nặng hơn mức cho phép (Ảnh <10MB, Video <100MB). Hệ thống sẽ bỏ qua tệp này.`,
+            "warning",
+          );
+          continue; // Bỏ qua file này, tiếp tục tải các file khác
+        }
+        // ----------------------------------------------
+
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album");
+        formData.append("upload_preset", "react_album"); // <--- NHỚ ĐỔI NẾU KHÁC
 
         const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY LẠI CLOUD NAME CỦA BẠN NHÉ
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`, // <--- THAY LẠI CLOUD NAME CỦA BẠN
           {
             method: "POST",
             body: formData,
           },
         );
+
+        // Nếu Cloudinary trả về lỗi (ví dụ định dạng không hỗ trợ)
+        if (!res.ok) {
+          console.error("Lỗi từ Cloudinary:", await res.text());
+          continue;
+        }
+
         const data = await res.json();
         const finalName = photoName
           ? imageUploads.length > 1
@@ -329,15 +354,21 @@ export default function Dashboard() {
           albumId: selectedAlbum.id,
           uploaderId: auth.currentUser.uid,
           name: finalName,
-          mediaType: data.resource_type || "image", // Cloudinary sẽ gán là 'raw' nếu là file .doc, .pdf
+          mediaType: data.resource_type || "image",
           uploadedAt: serverTimestamp(),
         });
+
+        successCount++; // Tăng biến đếm thành công
       }
-      Swal.fire({
-        title: "Thành công!",
-        text: `Đã tải lên ${imageUploads.length} tệp!`,
-        icon: "success",
-      });
+
+      if (successCount > 0) {
+        Swal.fire({
+          title: "Hoàn tất!",
+          text: `Đã tải lên thành công ${successCount} tệp!`,
+          icon: "success",
+        });
+      }
+
       setImageUploads([]);
       setPhotoName("");
       document.getElementById("file-upload").value = "";
@@ -351,9 +382,10 @@ export default function Dashboard() {
         photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
       );
     } catch (error) {
+      console.error(error);
       Swal.fire(
         "Lỗi",
-        "Không thể tải tệp lên! Hãy kiểm tra cài đặt Upload Presets trên Cloudinary.",
+        "Đường truyền gián đoạn hoặc có lỗi không xác định!",
         "error",
       );
     } finally {

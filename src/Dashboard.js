@@ -609,7 +609,7 @@ export default function Dashboard() {
                         id="file-upload"
                         type="file"
                         multiple
-                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi, .pdf, .doc, .docx, .xls, .xlsx, .txt"
+                        accept="image/*,video/*,.mp4,.mov,.mkv,.avi,.pdf,.doc,.docx,.xls,.xlsx,.txt,.heic,.heif"
                         onChange={(e) => setImageUploads(e.target.files)}
                         className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />

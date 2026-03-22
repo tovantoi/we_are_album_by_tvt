@@ -1,6 +1,5 @@
 // src/Dashboard.js
 import React, { useState, useEffect } from "react";
-import imageCompression from "browser-image-compression";
 import { auth, db } from "./firebase";
 import {
   collection,
@@ -18,11 +17,12 @@ import {
   deleteField,
   setDoc,
   onSnapshot,
+  orderBy,
 } from "firebase/firestore";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import Swal from "sweetalert2";
+import imageCompression from "browser-image-compression";
 
-// Import thêm icon FileText cho file tài liệu
 import {
   LogOut,
   FolderPlus,
@@ -39,7 +39,12 @@ import {
   Download,
   PlayCircle,
   Activity,
-  FileText, // <--- THÊM MỚI
+  FileText,
+  Heart,
+  MessageSquare,
+  SquareCheck,
+  Check,
+  Send,
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -58,22 +63,11 @@ export default function Dashboard() {
   const [allUsers, setAllUsers] = useState([]);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  const fetchAlbums = async (currentRole) => {
-    if (!auth.currentUser) return;
-    let albumsQuery;
-    if (currentRole === "admin") {
-      albumsQuery = collection(db, "albums");
-    } else {
-      albumsQuery = query(
-        collection(db, "albums"),
-        where("allowedUsers", "array-contains", auth.currentUser.uid),
-      );
-    }
-    const albumsSnapshot = await getDocs(albumsQuery);
-    setAlbums(
-      albumsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-    );
-  };
+  // TÍNH NĂNG 1 & 3: Tương tác & Batch
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState("");
+  const [selectedPhotos, setSelectedPhotos] = useState(new Set());
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
@@ -87,27 +81,40 @@ export default function Dashboard() {
         } catch (error) {
           console.error("Lỗi lấy quyền:", error);
         }
-
         setRole(currentRole);
-        fetchAlbums(currentRole);
+
+        const albumsQuery =
+          currentRole === "admin"
+            ? collection(db, "albums")
+            : query(
+                collection(db, "albums"),
+                where("allowedUsers", "array-contains", user.uid),
+              );
+
+        const unsubscribeAlbums = onSnapshot(albumsQuery, (snapshot) => {
+          setAlbums(
+            snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+          );
+        });
 
         const updatePresence = async () => {
           try {
             const userRef = doc(db, "users", user.uid);
             await setDoc(
               userRef,
-              {
-                email: user.email,
-                lastActive: Date.now(),
-              },
+              { email: user.email, lastActive: Date.now() },
               { merge: true },
             );
           } catch (error) {}
         };
-
         updatePresence();
         const intervalId = setInterval(updatePresence, 60000);
-        return () => clearInterval(intervalId);
+
+        return () => {
+          unsubscribeAlbums();
+          clearInterval(intervalId);
+          unsubscribeAuth();
+        };
       } else {
         setRole("user");
         setAlbums([]);
@@ -119,8 +126,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (role === "admin") {
       const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
-        const usersData = snapshot.docs.map((doc) => doc.data());
-        setAllUsers(usersData);
+        setAllUsers(snapshot.docs.map((doc) => doc.data()));
       });
       return () => unsubscribe();
     }
@@ -134,6 +140,25 @@ export default function Dashboard() {
   const onlineUsers = allUsers.filter(
     (u) => u.lastActive && currentTime - u.lastActive < 120000,
   );
+
+  // TÍNH NĂNG 1: Lắng nghe bình luận
+  useEffect(() => {
+    if (viewImage && !isDocumentFile(viewImage)) {
+      const commentsQuery = query(
+        collection(db, `photos/${viewImage.id}/comments`),
+        orderBy("createdAt", "asc"),
+      );
+      const unsubscribeComments = onSnapshot(commentsQuery, (snapshot) => {
+        setComments(
+          snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+        );
+      });
+      return () => unsubscribeComments();
+    } else {
+      setComments([]);
+    }
+    // eslint-disable-next-line
+  }, [viewImage]);
 
   const handleLogout = async () => {
     if (auth.currentUser) {
@@ -164,7 +189,6 @@ export default function Dashboard() {
         confirmButtonColor: "#0ea5e9",
       });
       setNewAlbumName("");
-      fetchAlbums(role);
     } catch (e) {
       Swal.fire("Lỗi!", "Không thể tạo album.", "error");
     }
@@ -190,7 +214,6 @@ export default function Dashboard() {
         timer: 1500,
         showConfirmButton: false,
       });
-      fetchAlbums(role);
       setSelectedAlbum(null);
     }
   };
@@ -201,17 +224,144 @@ export default function Dashboard() {
       collection(db, "photos"),
       where("albumId", "==", album.id),
     );
-    const photosSnapshot = await getDocs(photosQuery);
-    setPhotos(
-      photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-    );
+    const unsubscribePhotos = onSnapshot(photosQuery, (snapshot) => {
+      // Sắp xếp tạm thời ở client để tránh lỗi cần tạo Index trên Firebase
+      const sortedPhotos = snapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .sort(
+          (a, b) => (b.uploadedAt?.seconds || 0) - (a.uploadedAt?.seconds || 0),
+        );
+      setPhotos(sortedPhotos);
+    });
+    setSelectedPhotos(new Set());
+    setIsSelectionMode(false);
+    return () => unsubscribePhotos();
+  };
+
+  // TÍNH NĂNG 1: Tương tác Thả tim & Bình luận
+  const handleLikePhoto = async (photo) => {
+    const uid = auth.currentUser.uid;
+    const photoRef = doc(db, "photos", photo.id);
+    const isLiked = photo.likes && photo.likes.includes(uid);
+    try {
+      if (isLiked) {
+        await updateDoc(photoRef, {
+          likes: arrayRemove(uid),
+          likeCount: (photo.likeCount || 0) - 1,
+        });
+      } else {
+        await updateDoc(photoRef, {
+          likes: arrayUnion(uid),
+          likeCount: (photo.likeCount || 0) + 1,
+        });
+      }
+      // Cập nhật viewImage hiện tại nếu đang mở
+      if (viewImage && viewImage.id === photo.id) {
+        const updatedDoc = await getDoc(photoRef);
+        setViewImage({ id: updatedDoc.id, ...updatedDoc.data() });
+      }
+    } catch (error) {}
+  };
+
+  const handleAddComment = async () => {
+    if (!newComment.trim() || !viewImage) return;
+    try {
+      await addDoc(collection(db, `photos/${viewImage.id}/comments`), {
+        uid: auth.currentUser.uid,
+        email: auth.currentUser.email,
+        content: newComment.trim(),
+        createdAt: serverTimestamp(),
+      });
+      setNewComment("");
+    } catch (error) {}
+  };
+
+  const currentUserPermission =
+    selectedAlbum?.permissions?.[auth.currentUser?.uid] || "view";
+  const canUpload = role === "admin" || currentUserPermission === "edit";
+
+  const handleUploadPhotos = async () => {
+    if (!selectedAlbum || imageUploads.length === 0) {
+      Swal.fire("Chú ý", "Vui lòng chọn tệp trước!", "info");
+      return;
+    }
+    setLoading(true);
+    let successCount = 0;
+    try {
+      for (let i = 0; i < imageUploads.length; i++) {
+        let file = imageUploads[i];
+        const isImage = file.type.startsWith("image/");
+        const isVideo = file.type.startsWith("video/");
+
+        // TÍNH NĂNG: Nén ảnh tự động
+        if (isImage && file.size > 8 * 1024 * 1024) {
+          const options = {
+            maxSizeMB: 8,
+            maxWidthOrHeight: 3000,
+            useWebWorker: true,
+          };
+          try {
+            file = await imageCompression(file, options);
+          } catch (error) {}
+        }
+
+        const maxSize = isVideo ? 100 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (file.size > maxSize) {
+          await Swal.fire(
+            "Tệp quá nặng!",
+            `Tệp "${file.name}" quá lớn (Ảnh <10MB, Video <100MB).`,
+            "warning",
+          );
+          continue;
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET NẾU CẦN
+
+        const res = await fetch(
+          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
+          { method: "POST", body: formData },
+        ); // <--- THAY CLOUD NAME
+        if (!res.ok) continue;
+        const data = await res.json();
+        const finalName = photoName
+          ? imageUploads.length > 1
+            ? `${photoName} - ${i + 1}`
+            : photoName
+          : file.name;
+
+        await addDoc(collection(db, "photos"), {
+          imageUrl: data.secure_url,
+          albumId: selectedAlbum.id,
+          uploaderId: auth.currentUser.uid,
+          name: finalName,
+          mediaType: data.resource_type || "image",
+          likes: [],
+          likeCount: 0,
+          uploadedAt: serverTimestamp(),
+        });
+        successCount++;
+      }
+      if (successCount > 0) {
+        Swal.fire({
+          title: "Hoàn tất!",
+          text: `Đã tải lên ${successCount} tệp!`,
+          icon: "success",
+        });
+      }
+      setImageUploads([]);
+      setPhotoName("");
+      document.getElementById("file-upload").value = "";
+    } catch (error) {
+      Swal.fire("Lỗi", "Không thể tải tệp lên!", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleUpdatePermission = async () => {
-    if (role !== "admin" || !manageUid) {
-      Swal.fire("Lưu ý", "Vui lòng nhập UID của người dùng!", "warning");
-      return;
-    }
+    if (role !== "admin" || !manageUid) return;
     try {
       const albumRef = doc(db, "albums", selectedAlbum.id);
       await updateDoc(albumRef, {
@@ -255,159 +405,119 @@ export default function Dashboard() {
     }
   };
 
-  const handleDownloadPhoto = async (photo) => {
-    // Nếu là file tài liệu (raw), đôi khi việc tạo Blob sẽ bị lỗi CORS, nên mở sang tab mới cho an toàn
+  const getPermissionLabel = (uid) => {
+    return selectedAlbum.permissions[uid] === "edit"
+      ? { text: "Được Edit", class: "bg-green-100 text-green-700" }
+      : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
+  };
+
+  // TÍNH NĂNG 3: Batch Actions (Tải về/Xóa hàng loạt)
+  const togglePhotoSelection = (photoId) => {
+    setSelectedPhotos((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(photoId)) {
+        newSet.delete(photoId);
+      } else {
+        newSet.add(photoId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleBatchDownload = async () => {
+    if (selectedPhotos.size === 0) return;
+    Swal.fire({
+      title: "Đang chuẩn bị...",
+      allowOutsideClick: false,
+      didOpen: () => Swal.showLoading(),
+    });
+    try {
+      for (const photoId of selectedPhotos) {
+        const photo = photos.find((p) => p.id === photoId);
+        await handleDownloadPhoto(photo, true);
+      }
+      Swal.fire({
+        title: "Thành công!",
+        icon: "success",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (error) {
+    } finally {
+      setSelectedPhotos(new Set());
+      setIsSelectionMode(false);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedPhotos.size === 0) return;
+    const result = await Swal.fire({
+      title: `Xóa ${selectedPhotos.size} tệp đã chọn?`,
+      text: "Thao tác này không thể khôi phục!",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#f43f5e",
+      cancelButtonColor: "#94a3b8",
+      confirmButtonText: "Xóa",
+      cancelButtonText: "Hủy",
+    });
+    if (result.isConfirmed) {
+      setLoading(true);
+      try {
+        for (const photoId of selectedPhotos) {
+          const photo = photos.find((p) => p.id === photoId);
+          if (role === "admin" || photo.uploaderId === auth.currentUser?.uid) {
+            await deleteDoc(doc(db, "photos", photoId));
+          }
+        }
+        Swal.fire({
+          title: "Đã xóa!",
+          icon: "success",
+          timer: 1500,
+          showConfirmButton: false,
+        });
+      } catch (error) {
+      } finally {
+        setSelectedPhotos(new Set());
+        setIsSelectionMode(false);
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleDownloadPhoto = async (photo, silent = false) => {
     if (isDocumentFile(photo)) {
       window.open(photo.imageUrl, "_blank");
       return;
     }
-
     try {
-      Swal.fire({
-        title: "Đang tải...",
-        allowOutsideClick: false,
-        didOpen: () => {
-          Swal.showLoading();
-        },
-      });
+      if (!silent)
+        Swal.fire({
+          title: "Đang tải...",
+          allowOutsideClick: false,
+          didOpen: () => {
+            Swal.showLoading();
+          },
+        });
       const response = await fetch(photo.imageUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
-
       let finalName = photo.name || "ky-niem";
       if (!finalName.toLowerCase().endsWith(extension)) {
         finalName += extension;
       }
-
       link.download = finalName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      Swal.close();
+      if (!silent) Swal.close();
     } catch (error) {
-      Swal.close();
+      if (!silent) Swal.close();
       window.open(photo.imageUrl, "_blank");
-    }
-  };
-
-  const currentUserPermission =
-    selectedAlbum?.permissions?.[auth.currentUser?.uid] || "view";
-  const canUpload = role === "admin" || currentUserPermission === "edit";
-
-  const handleUploadPhotos = async () => {
-    if (!selectedAlbum || imageUploads.length === 0) {
-      Swal.fire("Chú ý", "Vui lòng chọn tệp trước!", "info");
-      return;
-    }
-    setLoading(true);
-
-    let successCount = 0; // Đếm số file tải thành công
-
-    try {
-      for (let i = 0; i < imageUploads.length; i++) {
-        let file = imageUploads[i]; // Đổi từ const sang let để có thể ghi đè file nén
-
-        const isImage = file.type.startsWith("image/");
-        const isVideo = file.type.startsWith("video/");
-
-        // --- BỘ NÉN ẢNH THÔNG MINH ---
-        // Nếu là ảnh và nặng trên 8MB thì nén ngay lập tức
-        if (isImage && file.size > 8 * 1024 * 1024) {
-          const options = {
-            maxSizeMB: 8, // Ép dung lượng xuống dưới 8MB
-            maxWidthOrHeight: 3000, // Giữ độ nét cao
-            useWebWorker: true, // Nén mượt mà không đơ máy
-          };
-          try {
-            file = await imageCompression(file, options);
-          } catch (error) {
-            console.error("Lỗi nén ảnh:", error);
-          }
-        }
-        // ----------------------------------------------
-
-        // Kiểm tra lại dung lượng sau khi nén (hoặc kiểm tra video gốc)
-        const maxSize = isVideo ? 100 * 1024 * 1024 : 10 * 1024 * 1024; // Video 100MB, Ảnh/Tài liệu 10MB
-
-        if (file.size > maxSize) {
-          await Swal.fire(
-            "Tệp quá nặng!",
-            `Tệp "${file.name}" (dù đã nén) vẫn nặng hơn mức cho phép (Ảnh <10MB, Video <100MB). Hệ thống sẽ bỏ qua tệp này.`,
-            "warning",
-          );
-          continue; // Bỏ qua file này, tiếp tục tải các file khác
-        }
-
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("upload_preset", "react_album");
-
-        const res = await fetch(
-          `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
-          {
-            method: "POST",
-            body: formData,
-          },
-        );
-
-        // Nếu Cloudinary trả về lỗi
-        if (!res.ok) {
-          console.error("Lỗi từ Cloudinary:", await res.text());
-          continue;
-        }
-
-        const data = await res.json();
-        const finalName = photoName
-          ? imageUploads.length > 1
-            ? `${photoName} - ${i + 1}`
-            : photoName
-          : file.name;
-
-        await addDoc(collection(db, "photos"), {
-          imageUrl: data.secure_url,
-          albumId: selectedAlbum.id,
-          uploaderId: auth.currentUser.uid,
-          name: finalName,
-          mediaType: data.resource_type || "image",
-          uploadedAt: serverTimestamp(),
-        });
-
-        successCount++; // Tăng biến đếm thành công
-      }
-
-      if (successCount > 0) {
-        Swal.fire({
-          title: "Hoàn tất!",
-          text: `Đã tải lên thành công ${successCount} tệp!`,
-          icon: "success",
-        });
-      }
-
-      setImageUploads([]);
-      setPhotoName("");
-      document.getElementById("file-upload").value = "";
-
-      const photosQuery = query(
-        collection(db, "photos"),
-        where("albumId", "==", selectedAlbum.id),
-      );
-      const photosSnapshot = await getDocs(photosQuery);
-      setPhotos(
-        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-      );
-    } catch (error) {
-      console.error(error);
-      Swal.fire(
-        "Lỗi",
-        "Đường truyền gián đoạn hoặc có lỗi không xác định!",
-        "error",
-      );
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -422,14 +532,6 @@ export default function Dashboard() {
     });
     if (newName && newName.trim() !== "") {
       await updateDoc(doc(db, "photos", photo.id), { name: newName });
-      const photosQuery = query(
-        collection(db, "photos"),
-        where("albumId", "==", selectedAlbum.id),
-      );
-      const photosSnapshot = await getDocs(photosQuery);
-      setPhotos(
-        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-      );
     }
   };
 
@@ -444,41 +546,16 @@ export default function Dashboard() {
     });
     if (result.isConfirmed) {
       await deleteDoc(doc(db, "photos", photo.id));
-      const photosQuery = query(
-        collection(db, "photos"),
-        where("albumId", "==", selectedAlbum.id),
-      );
-      const photosSnapshot = await getDocs(photosQuery);
-      setPhotos(
-        photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-      );
       if (viewImage && viewImage.id === photo.id) setViewImage(null);
     }
   };
 
-  const getPermissionLabel = (uid) => {
-    return selectedAlbum.permissions[uid] === "edit"
-      ? { text: "Được Edit", class: "bg-green-100 text-green-700" }
-      : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
-  };
-
-  // --- HÀM KIỂM TRA ĐỊNH DẠNG FILE ---
-  const isVideoFile = (photo) => {
-    return (
-      photo.mediaType === "video" ||
-      (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i))
-    );
-  };
-
-  const isDocumentFile = (photo) => {
-    return (
-      photo.mediaType === "raw" || // Cloudinary nhận dạng file tài liệu là raw
-      (photo.imageUrl &&
-        photo.imageUrl.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i)) ||
-      (photo.name && photo.name.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i))
-    );
-  };
-  // -------------------------------------
+  const isVideoFile = (photo) =>
+    photo.mediaType === "video" ||
+    (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i));
+  const isDocumentFile = (photo) =>
+    photo.mediaType === "raw" ||
+    (photo.imageUrl && photo.imageUrl.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i));
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
@@ -503,20 +580,19 @@ export default function Dashboard() {
             <span className="hidden md:inline">
               Chào, <b>{auth.currentUser?.email}</b>
             </span>
-            <span className="md:hidden font-medium">Chào bạn</span>
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 bg-white text-rose-600 px-4 py-2 rounded-full shadow hover:bg-rose-50 transition"
             >
               <LogOut size={16} />{" "}
-              <span className="hidden sm:inline">Đăng xuất</span>
+              <span className="hidden sm:inline">Thoát</span>
             </button>
           </div>
         </nav>
       </header>
 
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-        {!selectedAlbum && (
+        {!selectedAlbum ? (
           <div className="space-y-6">
             {role === "admin" && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -627,21 +703,72 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        )}
-
-        {selectedAlbum && (
+        ) : (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
               <button
                 onClick={() => setSelectedAlbum(null)}
-                className="flex items-center justify-center sm:justify-start gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-full sm:w-fit hover:bg-sky-200 transition font-medium"
+                className="flex items-center gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-full sm:w-fit hover:bg-sky-200 transition font-medium"
               >
                 <ChevronLeft size={18} /> Trở về
               </button>
               <h2 className="text-xl sm:text-2xl font-bold text-sky-950 truncate text-center sm:text-right">
                 Album: {selectedAlbum.name}
               </h2>
+              {canUpload && (
+                <button
+                  onClick={() => setIsSelectionMode(!isSelectionMode)}
+                  className={`flex items-center justify-center gap-2 ${isSelectionMode ? "bg-sky-500 text-white" : "bg-sky-100 text-sky-700"} px-4 py-2 rounded-full transition font-medium`}
+                >
+                  {isSelectionMode ? (
+                    <Check size={18} />
+                  ) : (
+                    <SquareCheck size={18} />
+                  )}{" "}
+                  Chọn nhiều
+                </button>
+              )}
             </div>
+
+            {/* Thanh điều khiển Batch Actions nổi */}
+            {isSelectionMode && selectedPhotos.size > 0 && (
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-white/95 p-3 sm:px-6 rounded-full shadow-2xl backdrop-blur-sm border border-slate-200 flex items-center gap-4 animate-in slide-in-from-bottom-5">
+                <span className="text-sm font-semibold text-sky-900 whitespace-nowrap">
+                  Đã chọn: {selectedPhotos.size}
+                </span>
+                <button
+                  onClick={handleBatchDownload}
+                  className="p-2.5 bg-emerald-500 text-white rounded-full hover:bg-emerald-600 transition shadow-lg shadow-emerald-500/30"
+                  title="Tải về hàng loạt"
+                >
+                  <Download size={18} />
+                </button>
+                {(role === "admin" ||
+                  [...selectedPhotos].every(
+                    (id) =>
+                      photos.find((p) => p.id === id).uploaderId ===
+                      auth.currentUser?.uid,
+                  )) && (
+                  <button
+                    onClick={handleBatchDelete}
+                    className="p-2.5 bg-rose-500 text-white rounded-full hover:bg-rose-600 transition shadow-lg shadow-rose-500/30"
+                    title="Xóa hàng loạt"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setIsSelectionMode(false);
+                    setSelectedPhotos(new Set());
+                  }}
+                  className="p-2.5 bg-slate-200 text-slate-700 rounded-full hover:bg-slate-300 transition"
+                  title="Hủy chọn"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               <div className="lg:col-span-3 space-y-6 order-last lg:order-first">
@@ -650,16 +777,15 @@ export default function Dashboard() {
                     <div className="flex items-center gap-3">
                       <CloudUpload className="text-emerald-500" />
                       <h4 className="font-semibold text-emerald-900 text-sm sm:text-base">
-                        Thêm Tệp mới (Ảnh/Video/Tài liệu)
+                        Thêm Tệp mới
                       </h4>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3">
-                      {/* BỔ SUNG ĐỊNH DẠNG TÀI LIỆU VÀO INPUT */}
                       <input
                         id="file-upload"
                         type="file"
                         multiple
-                        accept="image/*,video/*,.mp4,.mov,.mkv,.avi,.pdf,.doc,.docx,.xls,.xlsx,.txt,.heic,.heif"
+                        accept="image/*, video/*, .mp4, .mov, .mkv, .avi, .pdf, .doc, .docx, .xls, .xlsx, .txt, .heic, .heif"
                         onChange={(e) => setImageUploads(e.target.files)}
                         className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-full file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer"
                       />
@@ -687,44 +813,69 @@ export default function Dashboard() {
                       role === "admin" ||
                       (canUpload && photo.uploaderId === auth.currentUser?.uid);
                     const isVid = isVideoFile(photo);
-                    const isDoc = isDocumentFile(photo); // Kích hoạt kiểm tra tài liệu
+                    const isDoc = isDocumentFile(photo);
+                    const isSelected = selectedPhotos.has(photo.id);
 
                     return (
                       <div
                         key={photo.id}
-                        className="bg-white border border-sky-100 p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition"
+                        className={`bg-white border ${isSelected ? "border-sky-400 ring-2 ring-sky-100" : "border-sky-100"} p-2 sm:p-3 rounded-2xl flex flex-col items-center gap-2 shadow-sm hover:shadow-lg transition relative`}
                       >
-                        {/* BOX CHỨA ẢNH / VIDEO / TÀI LIỆU */}
+                        {isSelectionMode && (
+                          <div
+                            onClick={() => togglePhotoSelection(photo.id)}
+                            className={`absolute top-4 right-4 z-10 w-6 h-6 rounded-full border-2 ${isSelected ? "bg-sky-500 border-sky-500 text-white" : "bg-white/70 border-slate-300"} flex items-center justify-center cursor-pointer transition shadow-sm`}
+                          >
+                            {isSelected && <Check size={14} />}
+                          </div>
+                        )}
+
                         <div
-                          className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer group bg-slate-100"
-                          onClick={() => setViewImage(photo)}
+                          className="relative w-full h-32 sm:h-48 rounded-xl overflow-hidden cursor-pointer bg-slate-100 group"
+                          onClick={() => {
+                            if (!isSelectionMode) {
+                              setViewImage(photo);
+                            } else {
+                              togglePhotoSelection(photo.id);
+                            }
+                          }}
                         >
                           {isDoc ? (
-                            // NẾU LÀ TÀI LIỆU (.DOC, .PDF)
                             <div className="w-full h-full flex flex-col items-center justify-center bg-sky-50 text-sky-600 group-hover:bg-sky-100 transition">
                               <FileText size={48} className="mb-2 opacity-80" />
-                              <span className="text-xs font-semibold px-2 text-center text-sky-800 line-clamp-2">
-                                {photo.name}
-                              </span>
                             </div>
                           ) : isVid ? (
-                            // NẾU LÀ VIDEO
                             <>
                               <video
                                 src={photo.imageUrl}
-                                className="w-full h-full object-cover group-hover:opacity-80 transition bg-black"
+                                className="w-full h-full object-cover bg-black group-hover:opacity-90 transition"
                               />
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <PlayCircle className="text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
-                              </div>
+                              <PlayCircle className="absolute inset-0 m-auto text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
                             </>
                           ) : (
-                            // NẾU LÀ ẢNH
                             <img
                               src={photo.imageUrl}
                               alt={photo.name}
-                              className="w-full h-full object-cover group-hover:opacity-90 transition bg-black"
+                              loading="lazy"
+                              className="w-full h-full object-cover bg-black group-hover:opacity-90 transition"
                             />
+                          )}
+
+                          {/* Mini Stats Overlay */}
+                          {!isDoc && (
+                            <div className="absolute bottom-2 right-2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white px-2 py-1 rounded-lg text-xs font-medium">
+                              <span className="flex items-center gap-1">
+                                <Heart
+                                  size={12}
+                                  className={
+                                    photo.likes?.includes(auth.currentUser?.uid)
+                                      ? "fill-rose-500 text-rose-500"
+                                      : ""
+                                  }
+                                />{" "}
+                                {photo.likeCount || 0}
+                              </span>
+                            </div>
                           )}
                         </div>
 
@@ -735,38 +886,40 @@ export default function Dashboard() {
                           {photo.name}
                         </p>
 
-                        <div className="flex gap-1 sm:gap-2 w-full pt-1 border-t border-sky-100 mt-1">
-                          <button
-                            onClick={() => handleDownloadPhoto(photo)}
-                            className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-[10px] sm:text-xs font-medium"
-                            title={isDoc ? "Mở/Tải tài liệu" : "Tải về"}
-                          >
-                            <Download size={14} />{" "}
-                            <span className="hidden sm:inline">
-                              {isDoc ? "Mở file" : "Tải"}
-                            </span>
-                          </button>
-                          {canEditThisPhoto && (
-                            <>
-                              <button
-                                onClick={() => handleEditPhotoName(photo)}
-                                className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition text-[10px] sm:text-xs font-medium"
-                                title="Đổi tên"
-                              >
-                                <Edit3 size={14} />{" "}
-                                <span className="hidden sm:inline">Tên</span>
-                              </button>
-                              <button
-                                onClick={() => handleDeletePhoto(photo)}
-                                className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition text-[10px] sm:text-xs font-medium"
-                                title="Xóa"
-                              >
-                                <Trash2 size={14} />{" "}
-                                <span className="hidden sm:inline">Xóa</span>
-                              </button>
-                            </>
-                          )}
-                        </div>
+                        {!isSelectionMode && (
+                          <div className="flex gap-1 sm:gap-2 w-full pt-1 border-t border-sky-100 mt-1">
+                            <button
+                              onClick={() => handleDownloadPhoto(photo)}
+                              className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition text-[10px] sm:text-xs font-medium"
+                              title={isDoc ? "Mở/Tải tài liệu" : "Tải về"}
+                            >
+                              <Download size={14} />{" "}
+                              <span className="hidden sm:inline">
+                                {isDoc ? "Mở file" : "Tải"}
+                              </span>
+                            </button>
+                            {canEditThisPhoto && (
+                              <>
+                                <button
+                                  onClick={() => handleEditPhotoName(photo)}
+                                  className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition text-[10px] sm:text-xs font-medium"
+                                  title="Đổi tên"
+                                >
+                                  <Edit3 size={14} />{" "}
+                                  <span className="hidden sm:inline">Tên</span>
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePhoto(photo)}
+                                  className="flex-1 flex items-center justify-center gap-1 p-1.5 sm:p-2 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition text-[10px] sm:text-xs font-medium"
+                                  title="Xóa"
+                                >
+                                  <Trash2 size={14} />{" "}
+                                  <span className="hidden sm:inline">Xóa</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -850,67 +1003,122 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* LIGHTBOX XEM TO */}
+      {/* LIGHTBOX XEM TO (Có chức năng thả tim và bình luận) */}
       {viewImage && (
         <div
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 p-4 sm:p-8 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-0 sm:p-8 backdrop-blur-sm"
           onClick={() => setViewImage(null)}
         >
           <button
             onClick={() => setViewImage(null)}
-            className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition z-50"
+            className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition z-50"
           >
             <X size={24} className="sm:w-7 sm:h-7" />
           </button>
+
           <div
-            className="relative max-w-5xl w-full flex flex-col items-center"
+            className="w-full h-full sm:h-[85vh] max-w-6xl bg-black sm:bg-slate-900 sm:rounded-2xl overflow-hidden flex flex-col lg:flex-row shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* KIỂM TRA ĐỂ MỞ TÀI LIỆU, VIDEO HAY ẢNH */}
-            {isDocumentFile(viewImage) ? (
-              <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl flex flex-col items-center justify-center p-8 text-center">
-                <FileText size={80} className="text-sky-500 mb-6" />
-                <h3 className="text-xl font-bold text-slate-800 mb-3">
-                  {viewImage.name}
-                </h3>
-                <p className="text-sm text-slate-500 mb-8">
-                  Trình duyệt không hỗ trợ xem trước tệp tài liệu này. Vui lòng
-                  bấm mở tệp để xem chi tiết.
-                </p>
-                <button
-                  onClick={() => handleDownloadPhoto(viewImage)}
-                  className="bg-sky-500 hover:bg-sky-600 text-white px-8 py-3 rounded-full font-medium transition shadow-lg shadow-sky-500/30 w-full sm:w-auto"
-                >
-                  Mở / Tải Tệp Về Máy
-                </button>
-              </div>
-            ) : isVideoFile(viewImage) ? (
-              <video
-                src={viewImage.imageUrl}
-                controls
-                autoPlay
-                playsInline
-                className="w-full h-auto max-h-[70vh] sm:max-h-[75vh] object-contain rounded-lg shadow-2xl bg-black"
-              />
-            ) : (
-              <img
-                src={viewImage.imageUrl}
-                alt={viewImage.name}
-                className="w-full h-auto max-h-[70vh] sm:max-h-[75vh] object-contain rounded-lg shadow-2xl"
-              />
-            )}
+            {/* Cột trái: Hiển thị Ảnh/Video */}
+            <div className="flex-1 flex items-center justify-center bg-black relative p-2">
+              {isDocumentFile(viewImage) ? (
+                <div className="w-full max-w-md bg-white rounded-2xl flex flex-col items-center justify-center p-8 text-center m-4">
+                  <FileText size={80} className="text-sky-500 mb-6" />
+                  <h3 className="text-xl font-bold text-slate-800 mb-3">
+                    {viewImage.name}
+                  </h3>
+                  <button
+                    onClick={() => handleDownloadPhoto(viewImage)}
+                    className="bg-sky-500 text-white px-8 py-3 rounded-full font-medium w-full sm:w-auto"
+                  >
+                    Mở Tệp
+                  </button>
+                </div>
+              ) : isVideoFile(viewImage) ? (
+                <video
+                  src={viewImage.imageUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="max-w-full max-h-[50vh] lg:max-h-full object-contain"
+                />
+              ) : (
+                <img
+                  src={viewImage.imageUrl}
+                  alt={viewImage.name}
+                  className="max-w-full max-h-[50vh] lg:max-h-full object-contain"
+                />
+              )}
+            </div>
 
+            {/* Cột phải: Khung Bình luận & Tương tác */}
             {!isDocumentFile(viewImage) && (
-              <div className="mt-4 sm:mt-6 flex flex-col items-center gap-3 sm:gap-4 w-full px-4">
-                <p className="text-white text-base sm:text-xl font-medium text-center truncate w-full">
-                  {viewImage.name}
-                </p>
-                <button
-                  onClick={() => handleDownloadPhoto(viewImage)}
-                  className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 sm:px-6 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-medium transition shadow-lg shadow-emerald-500/30"
-                >
-                  <Download size={16} className="sm:w-5 sm:h-5" /> Tải về máy
-                </button>
+              <div className="w-full lg:w-96 bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none">
+                {/* Header người đăng & Nút thả tim */}
+                <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                  <p className="font-semibold text-slate-800 truncate max-w-[200px]">
+                    {viewImage.name}
+                  </p>
+                  <button
+                    onClick={() => handleLikePhoto(viewImage)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 text-rose-500 hover:bg-rose-100 transition font-medium"
+                  >
+                    <Heart
+                      size={18}
+                      className={
+                        viewImage.likes?.includes(auth.currentUser?.uid)
+                          ? "fill-rose-500"
+                          : ""
+                      }
+                    />{" "}
+                    {viewImage.likeCount || 0}
+                  </button>
+                </div>
+
+                {/* Danh sách bình luận */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
+                  {comments.length === 0 ? (
+                    <p className="text-center text-slate-400 text-sm italic mt-10">
+                      Chưa có bình luận nào. Hãy là người đầu tiên!
+                    </p>
+                  ) : (
+                    comments.map((cmt) => (
+                      <div key={cmt.id} className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-700">
+                          {cmt.email.split("@")[0]}
+                        </span>
+                        <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none w-fit max-w-[90%] mt-1">
+                          <p className="text-sm text-slate-800">
+                            {cmt.content}
+                          </p>
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-1 ml-1">
+                          {cmt.createdAt?.toDate().toLocaleString("vi-VN")}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Ô nhập bình luận */}
+                <div className="p-4 border-t bg-white flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Viết bình luận..."
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddComment()}
+                    className="flex-1 p-2.5 bg-slate-100 border-transparent rounded-full text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                  />
+                  <button
+                    onClick={handleAddComment}
+                    disabled={!newComment.trim()}
+                    className="p-2.5 bg-sky-500 text-white rounded-full hover:bg-sky-600 disabled:bg-slate-300 transition"
+                  >
+                    <Send size={18} className="ml-0.5" />
+                  </button>
+                </div>
               </div>
             )}
           </div>

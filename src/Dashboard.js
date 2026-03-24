@@ -45,7 +45,18 @@ import {
   SquareCheck,
   Check,
   Send,
+  Reply,
 } from "lucide-react";
+
+// BỘ CẢM XÚC FACEBOOK
+const REACTIONS = [
+  { id: "like", icon: "👍", label: "Thích" },
+  { id: "love", icon: "❤️", label: "Yêu thích" },
+  { id: "haha", icon: "😆", label: "Haha" },
+  { id: "wow", icon: "😲", label: "Wow" },
+  { id: "sad", icon: "😢", label: "Buồn" },
+  { id: "angry", icon: "😡", label: "Phẫn nộ" },
+];
 
 export default function Dashboard() {
   const [role, setRole] = useState("user");
@@ -62,11 +73,17 @@ export default function Dashboard() {
   const [viewImage, setViewImage] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const [currentTime, setCurrentTime] = useState(Date.now());
-
+  const onlineUsers = allUsers.filter(
+    (u) => u.lastActive && currentTime - u.lastActive < 120000,
+  );
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+  // STATE NÂNG CAO CHO BÌNH LUẬN
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [expandedReplies, setExpandedReplies] = useState(new Set()); // Lưu trạng thái Mở/Đóng của các bình luận con
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
@@ -77,9 +94,7 @@ export default function Dashboard() {
           if (userDoc.exists() && userDoc.data().role) {
             currentRole = userDoc.data().role;
           }
-        } catch (error) {
-          console.error("Lỗi lấy quyền:", error);
-        }
+        } catch (error) {}
         setRole(currentRole);
 
         const albumsQuery =
@@ -136,11 +151,6 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const onlineUsers = allUsers.filter(
-    (u) => u.lastActive && currentTime - u.lastActive < 120000,
-  );
-
-  // Bảo vệ hàm xem file để không sập khi viewImage null
   const isVideoFile = (photo) =>
     photo?.mediaType === "video" ||
     (photo?.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i));
@@ -163,6 +173,8 @@ export default function Dashboard() {
       return () => unsubscribeComments();
     } else {
       setComments([]);
+      setReplyingTo(null);
+      setExpandedReplies(new Set()); // Reset trạng thái mở rộng khi đổi ảnh
     }
     // eslint-disable-next-line
   }, [viewImage]);
@@ -268,15 +280,25 @@ export default function Dashboard() {
     } catch (error) {}
   };
 
-  // ĐÃ SỬA LỖI MÀN HÌNH ĐỎ Ở ĐÂY
+  // --- CÁC HÀM XỬ LÝ BÌNH LUẬN NÂNG CAO ---
+
   const handleAddComment = async () => {
     if (!newComment.trim() || !viewImage) return;
     try {
-      const currentImage = viewImage; // Khóa chặt biến để không bị rỗng
+      const currentImage = viewImage;
+      const finalParentId = replyingTo
+        ? replyingTo.parentId || replyingTo.id
+        : null;
+      // Ghi nhận tên của người mà mình đang trả lời (Mention)
+      const replyToName = replyingTo ? replyingTo.email.split("@")[0] : null;
+
       await addDoc(collection(db, `photos/${currentImage.id}/comments`), {
         uid: auth.currentUser.uid,
         email: auth.currentUser.email,
         content: newComment.trim(),
+        parentId: finalParentId,
+        replyToName: replyToName, // Lưu tên người được tag
+        reactions: {}, // Khởi tạo object chứa cảm xúc
         createdAt: serverTimestamp(),
       });
 
@@ -287,8 +309,33 @@ export default function Dashboard() {
       setViewImage((prev) =>
         prev ? { ...prev, commentCount: newCount } : null,
       );
+
+      // Tự động mở rộng phần trả lời nếu comment cha đang bị đóng
+      if (finalParentId) toggleReplies(finalParentId, true);
+
       setNewComment("");
+      setReplyingTo(null);
     } catch (error) {}
+  };
+
+  // Hàm thả cảm xúc vào bình luận
+  const handleCommentReaction = async (commentId, reactionId) => {
+    if (!viewImage) return;
+    const uid = auth.currentUser.uid;
+    const commentRef = doc(db, `photos/${viewImage.id}/comments`, commentId);
+    const comment = comments.find((c) => c.id === commentId);
+
+    // Nếu bấm lại chính icon cũ thì gỡ cảm xúc, bấm icon khác thì cập nhật
+    const currentReaction = comment.reactions?.[uid];
+    try {
+      if (currentReaction === reactionId) {
+        await updateDoc(commentRef, { [`reactions.${uid}`]: deleteField() });
+      } else {
+        await updateDoc(commentRef, { [`reactions.${uid}`]: reactionId });
+      }
+    } catch (error) {
+      console.error("Lỗi thả cảm xúc", error);
+    }
   };
 
   const handleEditComment = async (comment) => {
@@ -319,7 +366,6 @@ export default function Dashboard() {
     }
   };
 
-  // ĐÃ SỬA LỖI MÀN HÌNH ĐỎ Ở ĐÂY
   const handleDeleteComment = async (commentId) => {
     const result = await Swal.fire({
       title: "Xóa bình luận này?",
@@ -329,25 +375,79 @@ export default function Dashboard() {
       cancelButtonText: "Hủy",
       confirmButtonColor: "#f43f5e",
     });
-
     if (result.isConfirmed && viewImage) {
       try {
-        const currentImage = viewImage; // Khóa biến an toàn
+        const currentImage = viewImage;
+        const repliesToDelete = comments.filter(
+          (c) => c.parentId === commentId,
+        );
+        for (const reply of repliesToDelete) {
+          await deleteDoc(
+            doc(db, `photos/${currentImage.id}/comments`, reply.id),
+          );
+        }
         await deleteDoc(
           doc(db, `photos/${currentImage.id}/comments`, commentId),
         );
 
+        const deletedCount = 1 + repliesToDelete.length;
         const photoRef = doc(db, "photos", currentImage.id);
-        const newCount = Math.max((currentImage.commentCount || 1) - 1, 0);
+        const newCount = Math.max(
+          (currentImage.commentCount || deletedCount) - deletedCount,
+          0,
+        );
         await updateDoc(photoRef, { commentCount: newCount });
 
         setViewImage((prev) =>
           prev ? { ...prev, commentCount: newCount } : null,
         );
+        if (
+          replyingTo &&
+          (replyingTo.id === commentId || replyingTo.parentId === commentId)
+        )
+          setReplyingTo(null);
       } catch (error) {
         Swal.fire("Lỗi", "Không thể xóa bình luận", "error");
       }
     }
+  };
+
+  // Bật / Tắt danh sách trả lời
+  const toggleReplies = (commentId, forceOpen = false) => {
+    setExpandedReplies((prev) => {
+      const newSet = new Set(prev);
+      if (forceOpen) newSet.add(commentId);
+      else if (newSet.has(commentId)) newSet.delete(commentId);
+      else newSet.add(commentId);
+      return newSet;
+    });
+  };
+
+  // Render Huy hiệu cảm xúc góc dưới bình luận
+  const renderReactionBadge = (comment) => {
+    if (!comment.reactions || Object.keys(comment.reactions).length === 0)
+      return null;
+    const counts = {};
+    Object.values(comment.reactions).forEach(
+      (r) => (counts[r] = (counts[r] || 0) + 1),
+    );
+    const total = Object.values(comment.reactions).length;
+    // Lấy top 2 icon được thả nhiều nhất
+    const sorted = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+    const icons = sorted.map((s) => REACTIONS.find((r) => r.id === s[0])?.icon);
+    return (
+      <div
+        className="absolute -bottom-2 -right-2 bg-white rounded-full shadow border border-slate-100 px-1 py-0.5 text-[10px] flex items-center gap-0.5 z-10 cursor-default"
+        title={`Có ${total} lượt tương tác`}
+      >
+        {icons.join("")}{" "}
+        <span className="text-slate-500 font-medium ml-0.5">
+          {total > 1 ? total : ""}
+        </span>
+      </div>
+    );
   };
 
   const currentUserPermission =
@@ -451,9 +551,7 @@ export default function Dashboard() {
       setManageUid("");
       const updatedAlbum = await getDoc(albumRef);
       setSelectedAlbum({ id: updatedAlbum.id, ...updatedAlbum.data() });
-    } catch (e) {
-      Swal.fire("Lỗi", "Có lỗi xảy ra", "error");
-    }
+    } catch (e) {}
   };
 
   const handleRemovePermission = async (uidToRemove) => {
@@ -479,20 +577,16 @@ export default function Dashboard() {
     }
   };
 
-  const getPermissionLabel = (uid) => {
-    return selectedAlbum.permissions[uid] === "edit"
+  const getPermissionLabel = (uid) =>
+    selectedAlbum.permissions[uid] === "edit"
       ? { text: "Được Edit", class: "bg-green-100 text-green-700" }
       : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
-  };
 
   const togglePhotoSelection = (photoId) => {
     setSelectedPhotos((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(photoId)) {
-        newSet.delete(photoId);
-      } else {
-        newSet.add(photoId);
-      }
+      if (newSet.has(photoId)) newSet.delete(photoId);
+      else newSet.add(photoId);
       return newSet;
     });
   };
@@ -542,9 +636,8 @@ export default function Dashboard() {
           if (
             photo &&
             (role === "admin" || photo.uploaderId === auth.currentUser?.uid)
-          ) {
+          )
             await deleteDoc(doc(db, "photos", photoId));
-          }
         }
         Swal.fire({
           title: "Đã xóa!",
@@ -572,9 +665,7 @@ export default function Dashboard() {
         Swal.fire({
           title: "Đang tải...",
           allowOutsideClick: false,
-          didOpen: () => {
-            Swal.showLoading();
-          },
+          didOpen: () => Swal.showLoading(),
         });
       const response = await fetch(photo.imageUrl);
       const blob = await response.blob();
@@ -583,9 +674,7 @@ export default function Dashboard() {
       link.href = url;
       const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
       let finalName = photo.name || "ky-niem";
-      if (!finalName.toLowerCase().endsWith(extension)) {
-        finalName += extension;
-      }
+      if (!finalName.toLowerCase().endsWith(extension)) finalName += extension;
       link.download = finalName;
       document.body.appendChild(link);
       link.click();
@@ -607,9 +696,8 @@ export default function Dashboard() {
       confirmButtonColor: "#0ea5e9",
       cancelButtonColor: "#94a3b8",
     });
-    if (newName && newName.trim() !== "") {
+    if (newName && newName.trim() !== "")
       await updateDoc(doc(db, "photos", photo.id), { name: newName });
-    }
   };
 
   const handleDeletePhoto = async (photo) => {
@@ -629,6 +717,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
+      {/* ... Header & Album List (Giữ nguyên như cũ) ... */}
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
         <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center gap-2">
@@ -1075,7 +1164,7 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* LIGHTBOX XEM TO CÓ BÌNH LUẬN */}
+      {/* LIGHTBOX XEM TO (CÓ FACEBOOK COMMENTS UI) */}
       {viewImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-0 sm:p-8 backdrop-blur-sm"
@@ -1124,7 +1213,7 @@ export default function Dashboard() {
             </div>
 
             {!isDocumentFile(viewImage) && (
-              <div className="w-full lg:w-96 bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none">
+              <div className="w-full lg:w-[400px] bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none">
                 <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                   <p className="font-semibold text-slate-800 truncate max-w-[200px]">
                     {viewImage.name}
@@ -1145,59 +1234,291 @@ export default function Dashboard() {
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
+                {/* DANH SÁCH BÌNH LUẬN & TRẢ LỜI */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white relative">
                   {comments.length === 0 ? (
                     <p className="text-center text-slate-400 text-sm italic mt-10">
                       Chưa có bình luận nào. Hãy là người đầu tiên!
                     </p>
                   ) : (
-                    comments.map((cmt) => (
-                      <div
-                        key={cmt.id}
-                        className="flex flex-col relative group"
-                      >
-                        <span className="text-xs font-bold text-slate-700">
-                          {cmt.email.split("@")[0]}
-                        </span>
-                        <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none w-fit max-w-[90%] mt-1 flex flex-col">
-                          <p className="text-sm text-slate-800">
-                            {cmt.content}
-                          </p>
-                        </div>
+                    comments
+                      .filter((c) => !c.parentId)
+                      .map((cmt) => {
+                        const cmtReplies = comments.filter(
+                          (r) => r.parentId === cmt.id,
+                        );
+                        const isExpanded = expandedReplies.has(cmt.id);
 
-                        <div className="flex items-center gap-3 mt-1 ml-1">
-                          <span className="text-[10px] text-slate-400">
-                            {cmt.createdAt?.toDate().toLocaleString("vi-VN")}
-                          </span>
-                          {(cmt.uid === auth.currentUser?.uid ||
-                            role === "admin") && (
-                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {cmt.uid === auth.currentUser?.uid && (
+                        return (
+                          <div key={cmt.id} className="flex flex-col mb-2">
+                            {/* 1. Bình luận gốc */}
+                            <div className="flex flex-col mb-1 relative group">
+                              <span className="text-xs font-bold text-slate-800">
+                                {cmt.email.split("@")[0]}
+                              </span>
+                              <div className="relative w-fit">
+                                <div className="bg-slate-100 px-3 py-2 rounded-2xl rounded-tl-none max-w-[90%] mt-1 inline-block">
+                                  <p className="text-sm text-slate-800 whitespace-pre-wrap">
+                                    {cmt.content}
+                                  </p>
+                                </div>
+                                {/* HUY HIỆU CẢM XÚC */}
+                                {renderReactionBadge(cmt)}
+                              </div>
+
+                              {/* THANH CÔNG CỤ: Thời gian - Thích - Trả lời */}
+                              <div className="flex items-center gap-3 mt-1.5 ml-1 text-[11px] font-semibold text-slate-500 relative">
+                                <span className="font-normal text-slate-400">
+                                  {cmt.createdAt
+                                    ?.toDate()
+                                    .toLocaleString("vi-VN")
+                                    .split(",")[1]
+                                    ?.trim() || ""}
+                                </span>
+
+                                {/* NÚT THÍCH CÓ DROPDOWN CHỌN CẢM XÚC */}
+                                <div className="relative group/reaction flex items-center cursor-pointer">
+                                  <button
+                                    // Thêm chức năng: Bấm để Hủy hoặc mặc định Thích
+                                    onClick={() => {
+                                      const currentReaction =
+                                        cmt.reactions?.[auth.currentUser?.uid];
+                                      if (currentReaction)
+                                        handleCommentReaction(
+                                          cmt.id,
+                                          currentReaction,
+                                        );
+                                      // Hủy nếu đã thả
+                                      else
+                                        handleCommentReaction(cmt.id, "like"); // Mặc định Like nếu chưa thả
+                                    }}
+                                    className={`hover:underline font-bold transition-colors ${cmt.reactions?.[auth.currentUser?.uid] ? "text-rose-500" : ""}`}
+                                  >
+                                    {/* Đổi chữ Thích thành tên Cảm xúc tương ứng */}
+                                    {cmt.reactions?.[auth.currentUser?.uid]
+                                      ? REACTIONS.find(
+                                          (r) =>
+                                            r.id ===
+                                            cmt.reactions[auth.currentUser.uid],
+                                        )?.label || "Thích"
+                                      : "Thích"}
+                                  </button>
+
+                                  <div className="absolute bottom-full left-0 pb-2 hidden group-hover/reaction:flex z-20">
+                                    <div className="bg-white rounded-full shadow-lg border border-slate-100 p-1 flex gap-1">
+                                      {REACTIONS.map((reaction) => (
+                                        <button
+                                          key={reaction.id}
+                                          onClick={() =>
+                                            handleCommentReaction(
+                                              cmt.id,
+                                              reaction.id,
+                                            )
+                                          }
+                                          className="w-8 h-8 flex items-center justify-center text-lg hover:bg-slate-100 rounded-full transition transform hover:scale-125"
+                                          title={reaction.label}
+                                        >
+                                          {reaction.icon}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
                                 <button
-                                  onClick={() => handleEditComment(cmt)}
-                                  className="text-[10px] font-medium text-sky-600 hover:underline"
+                                  onClick={() => setReplyingTo(cmt)}
+                                  className="hover:underline"
                                 >
-                                  Sửa
+                                  Trả lời
                                 </button>
-                              )}
-                              <button
-                                onClick={() => handleDeleteComment(cmt.id)}
-                                className="text-[10px] font-medium text-rose-600 hover:underline"
-                              >
-                                Xóa
-                              </button>
+
+                                {(cmt.uid === auth.currentUser?.uid ||
+                                  role === "admin") && (
+                                  <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {cmt.uid === auth.currentUser?.uid && (
+                                      <button
+                                        onClick={() => handleEditComment(cmt)}
+                                        className="hover:underline"
+                                      >
+                                        Sửa
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() =>
+                                        handleDeleteComment(cmt.id)
+                                      }
+                                      className="text-rose-500 hover:underline"
+                                    >
+                                      Xóa
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    ))
+
+                            {/* 2. Toggle thu gọn/mở rộng nếu có bình luận con */}
+                            {cmtReplies.length > 0 && (
+                              <button
+                                onClick={() => toggleReplies(cmt.id)}
+                                className="text-[12px] font-semibold text-slate-500 text-left ml-6 mt-1 flex items-center gap-2 hover:underline"
+                              >
+                                <span className="w-4 border-b border-slate-300 inline-block"></span>
+                                {isExpanded
+                                  ? "Ẩn câu trả lời"
+                                  : `Xem ${cmtReplies.length} câu trả lời`}
+                              </button>
+                            )}
+
+                            {/* 3. Danh sách trả lời (Replies) */}
+                            {isExpanded &&
+                              cmtReplies.map((reply) => (
+                                <div
+                                  key={reply.id}
+                                  className="flex flex-col mt-3 ml-8 relative group"
+                                >
+                                  <span className="text-xs font-bold text-slate-800">
+                                    {reply.email.split("@")[0]}
+                                  </span>
+                                  <div className="relative w-fit">
+                                    <div className="bg-slate-100 px-3 py-2 rounded-2xl rounded-tl-none max-w-[95%] mt-1 inline-block">
+                                      <p className="text-sm text-slate-800 whitespace-pre-wrap">
+                                        {/* MENTION (Gắn thẻ người trả lời) */}
+                                        {reply.replyToName && (
+                                          <b className="text-sky-600 mr-1 cursor-pointer">
+                                            @{reply.replyToName}
+                                          </b>
+                                        )}
+                                        {reply.content}
+                                      </p>
+                                    </div>
+                                    {/* HUY HIỆU CẢM XÚC */}
+                                    {renderReactionBadge(reply)}
+                                  </div>
+
+                                  <div className="flex items-center gap-3 mt-1.5 ml-1 text-[11px] font-semibold text-slate-500 relative">
+                                    <span className="font-normal text-slate-400">
+                                      {reply.createdAt
+                                        ?.toDate()
+                                        .toLocaleString("vi-VN")
+                                        .split(",")[1]
+                                        ?.trim() || ""}
+                                    </span>
+
+                                    <div className="relative group/reaction flex items-center cursor-pointer">
+                                      <button
+                                        onClick={() => {
+                                          const currentReaction =
+                                            reply.reactions?.[
+                                              auth.currentUser?.uid
+                                            ];
+                                          if (currentReaction)
+                                            handleCommentReaction(
+                                              reply.id,
+                                              currentReaction,
+                                            );
+                                          else
+                                            handleCommentReaction(
+                                              reply.id,
+                                              "like",
+                                            );
+                                        }}
+                                        className={`hover:underline font-bold transition-colors ${reply.reactions?.[auth.currentUser?.uid] ? "text-rose-500" : ""}`}
+                                      >
+                                        {reply.reactions?.[
+                                          auth.currentUser?.uid
+                                        ]
+                                          ? REACTIONS.find(
+                                              (r) =>
+                                                r.id ===
+                                                reply.reactions[
+                                                  auth.currentUser.uid
+                                                ],
+                                            )?.label || "Thích"
+                                          : "Thích"}
+                                      </button>
+
+                                      <div className="absolute bottom-full left-0 pb-2 hidden group-hover/reaction:flex z-20">
+                                        <div className="bg-white rounded-full shadow-lg border border-slate-100 p-1 flex gap-1">
+                                          {REACTIONS.map((reaction) => (
+                                            <button
+                                              key={reaction.id}
+                                              onClick={() =>
+                                                handleCommentReaction(
+                                                  reply.id,
+                                                  reaction.id,
+                                                )
+                                              }
+                                              className="w-8 h-8 flex items-center justify-center text-lg hover:bg-slate-100 rounded-full transition transform hover:scale-125"
+                                              title={reaction.label}
+                                            >
+                                              {reaction.icon}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <button
+                                      onClick={() => setReplyingTo(reply)}
+                                      className="hover:underline"
+                                    >
+                                      Trả lời
+                                    </button>
+                                    {(reply.uid === auth.currentUser?.uid ||
+                                      role === "admin") && (
+                                      <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {reply.uid ===
+                                          auth.currentUser?.uid && (
+                                          <button
+                                            onClick={() =>
+                                              handleEditComment(reply)
+                                            }
+                                            className="hover:underline"
+                                          >
+                                            Sửa
+                                          </button>
+                                        )}
+                                        <button
+                                          onClick={() =>
+                                            handleDeleteComment(reply.id)
+                                          }
+                                          className="text-rose-500 hover:underline"
+                                        >
+                                          Xóa
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        );
+                      })
                   )}
                 </div>
+
+                {/* THANH TRẠNG THÁI "ĐANG TRẢ LỜI" */}
+                {replyingTo && (
+                  <div className="px-4 py-2 bg-sky-50 border-t border-sky-100 flex justify-between items-center text-xs text-sky-800 transition-all">
+                    <div className="flex items-center gap-2">
+                      <Reply size={14} className="text-sky-500" />
+                      <span>
+                        Đang trả lời <b>{replyingTo.email.split("@")[0]}</b>
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setReplyingTo(null)}
+                      className="p-1 hover:bg-sky-200 rounded-full transition text-sky-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
 
                 <div className="p-4 border-t bg-white flex items-center gap-2">
                   <input
                     type="text"
-                    placeholder="Viết bình luận..."
+                    placeholder={
+                      replyingTo ? "Viết câu trả lời..." : "Viết bình luận..."
+                    }
                     value={newComment}
                     onChange={(e) => setNewComment(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAddComment()}

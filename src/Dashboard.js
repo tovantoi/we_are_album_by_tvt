@@ -63,7 +63,6 @@ export default function Dashboard() {
   const [allUsers, setAllUsers] = useState([]);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  // TÍNH NĂNG 1 & 3: Tương tác & Batch
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState(new Set());
@@ -141,7 +140,15 @@ export default function Dashboard() {
     (u) => u.lastActive && currentTime - u.lastActive < 120000,
   );
 
-  // TÍNH NĂNG 1: Lắng nghe bình luận
+  // Bảo vệ hàm xem file để không sập khi viewImage null
+  const isVideoFile = (photo) =>
+    photo?.mediaType === "video" ||
+    (photo?.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i));
+  const isDocumentFile = (photo) =>
+    photo?.mediaType === "raw" ||
+    (photo?.imageUrl &&
+      photo.imageUrl.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i));
+
   useEffect(() => {
     if (viewImage && !isDocumentFile(viewImage)) {
       const commentsQuery = query(
@@ -225,7 +232,6 @@ export default function Dashboard() {
       where("albumId", "==", album.id),
     );
     const unsubscribePhotos = onSnapshot(photosQuery, (snapshot) => {
-      // Sắp xếp tạm thời ở client để tránh lỗi cần tạo Index trên Firebase
       const sortedPhotos = snapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() }))
         .sort(
@@ -238,8 +244,8 @@ export default function Dashboard() {
     return () => unsubscribePhotos();
   };
 
-  // TÍNH NĂNG 1: Tương tác Thả tim & Bình luận
   const handleLikePhoto = async (photo) => {
+    if (!photo) return;
     const uid = auth.currentUser.uid;
     const photoRef = doc(db, "photos", photo.id);
     const isLiked = photo.likes && photo.likes.includes(uid);
@@ -255,7 +261,6 @@ export default function Dashboard() {
           likeCount: (photo.likeCount || 0) + 1,
         });
       }
-      // Cập nhật viewImage hiện tại nếu đang mở
       if (viewImage && viewImage.id === photo.id) {
         const updatedDoc = await getDoc(photoRef);
         setViewImage({ id: updatedDoc.id, ...updatedDoc.data() });
@@ -263,17 +268,86 @@ export default function Dashboard() {
     } catch (error) {}
   };
 
+  // ĐÃ SỬA LỖI MÀN HÌNH ĐỎ Ở ĐÂY
   const handleAddComment = async () => {
     if (!newComment.trim() || !viewImage) return;
     try {
-      await addDoc(collection(db, `photos/${viewImage.id}/comments`), {
+      const currentImage = viewImage; // Khóa chặt biến để không bị rỗng
+      await addDoc(collection(db, `photos/${currentImage.id}/comments`), {
         uid: auth.currentUser.uid,
         email: auth.currentUser.email,
         content: newComment.trim(),
         createdAt: serverTimestamp(),
       });
+
+      const photoRef = doc(db, "photos", currentImage.id);
+      const newCount = (currentImage.commentCount || 0) + 1;
+      await updateDoc(photoRef, { commentCount: newCount });
+
+      setViewImage((prev) =>
+        prev ? { ...prev, commentCount: newCount } : null,
+      );
       setNewComment("");
     } catch (error) {}
+  };
+
+  const handleEditComment = async (comment) => {
+    if (!viewImage) return;
+    const { value: editedText } = await Swal.fire({
+      title: "Sửa bình luận",
+      input: "text",
+      inputValue: comment.content,
+      showCancelButton: true,
+      confirmButtonText: "Lưu",
+      cancelButtonText: "Hủy",
+      confirmButtonColor: "#0ea5e9",
+    });
+
+    if (
+      editedText &&
+      editedText.trim() !== "" &&
+      editedText !== comment.content
+    ) {
+      try {
+        await updateDoc(
+          doc(db, `photos/${viewImage.id}/comments`, comment.id),
+          { content: editedText.trim() },
+        );
+      } catch (error) {
+        Swal.fire("Lỗi", "Không thể sửa bình luận", "error");
+      }
+    }
+  };
+
+  // ĐÃ SỬA LỖI MÀN HÌNH ĐỎ Ở ĐÂY
+  const handleDeleteComment = async (commentId) => {
+    const result = await Swal.fire({
+      title: "Xóa bình luận này?",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Xóa",
+      cancelButtonText: "Hủy",
+      confirmButtonColor: "#f43f5e",
+    });
+
+    if (result.isConfirmed && viewImage) {
+      try {
+        const currentImage = viewImage; // Khóa biến an toàn
+        await deleteDoc(
+          doc(db, `photos/${currentImage.id}/comments`, commentId),
+        );
+
+        const photoRef = doc(db, "photos", currentImage.id);
+        const newCount = Math.max((currentImage.commentCount || 1) - 1, 0);
+        await updateDoc(photoRef, { commentCount: newCount });
+
+        setViewImage((prev) =>
+          prev ? { ...prev, commentCount: newCount } : null,
+        );
+      } catch (error) {
+        Swal.fire("Lỗi", "Không thể xóa bình luận", "error");
+      }
+    }
   };
 
   const currentUserPermission =
@@ -293,7 +367,6 @@ export default function Dashboard() {
         const isImage = file.type.startsWith("image/");
         const isVideo = file.type.startsWith("video/");
 
-        // TÍNH NĂNG: Nén ảnh tự động
         if (isImage && file.size > 8 * 1024 * 1024) {
           const options = {
             maxSizeMB: 8,
@@ -317,12 +390,12 @@ export default function Dashboard() {
 
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("upload_preset", "react_album"); // <--- THAY UPLOAD PRESET NẾU CẦN
+        formData.append("upload_preset", "react_album");
 
         const res = await fetch(
           `https://api.cloudinary.com/v1_1/ddzdect5z/auto/upload`,
           { method: "POST", body: formData },
-        ); // <--- THAY CLOUD NAME
+        );
         if (!res.ok) continue;
         const data = await res.json();
         const finalName = photoName
@@ -339,6 +412,7 @@ export default function Dashboard() {
           mediaType: data.resource_type || "image",
           likes: [],
           likeCount: 0,
+          commentCount: 0,
           uploadedAt: serverTimestamp(),
         });
         successCount++;
@@ -411,7 +485,6 @@ export default function Dashboard() {
       : { text: "Chỉ xem", class: "bg-blue-100 text-blue-700" };
   };
 
-  // TÍNH NĂNG 3: Batch Actions (Tải về/Xóa hàng loạt)
   const togglePhotoSelection = (photoId) => {
     setSelectedPhotos((prev) => {
       const newSet = new Set(prev);
@@ -434,7 +507,7 @@ export default function Dashboard() {
     try {
       for (const photoId of selectedPhotos) {
         const photo = photos.find((p) => p.id === photoId);
-        await handleDownloadPhoto(photo, true);
+        if (photo) await handleDownloadPhoto(photo, true);
       }
       Swal.fire({
         title: "Thành công!",
@@ -466,7 +539,10 @@ export default function Dashboard() {
       try {
         for (const photoId of selectedPhotos) {
           const photo = photos.find((p) => p.id === photoId);
-          if (role === "admin" || photo.uploaderId === auth.currentUser?.uid) {
+          if (
+            photo &&
+            (role === "admin" || photo.uploaderId === auth.currentUser?.uid)
+          ) {
             await deleteDoc(doc(db, "photos", photoId));
           }
         }
@@ -486,6 +562,7 @@ export default function Dashboard() {
   };
 
   const handleDownloadPhoto = async (photo, silent = false) => {
+    if (!photo) return;
     if (isDocumentFile(photo)) {
       window.open(photo.imageUrl, "_blank");
       return;
@@ -549,13 +626,6 @@ export default function Dashboard() {
       if (viewImage && viewImage.id === photo.id) setViewImage(null);
     }
   };
-
-  const isVideoFile = (photo) =>
-    photo.mediaType === "video" ||
-    (photo.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)$/i));
-  const isDocumentFile = (photo) =>
-    photo.mediaType === "raw" ||
-    (photo.imageUrl && photo.imageUrl.match(/\.(pdf|doc|docx|xls|xlsx|txt)$/i));
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-900">
@@ -730,7 +800,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Thanh điều khiển Batch Actions nổi */}
             {isSelectionMode && selectedPhotos.size > 0 && (
               <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-white/95 p-3 sm:px-6 rounded-full shadow-2xl backdrop-blur-sm border border-slate-200 flex items-center gap-4 animate-in slide-in-from-bottom-5">
                 <span className="text-sm font-semibold text-sky-900 whitespace-nowrap">
@@ -746,7 +815,7 @@ export default function Dashboard() {
                 {(role === "admin" ||
                   [...selectedPhotos].every(
                     (id) =>
-                      photos.find((p) => p.id === id).uploaderId ===
+                      photos.find((p) => p.id === id)?.uploaderId ===
                       auth.currentUser?.uid,
                   )) && (
                   <button
@@ -861,7 +930,6 @@ export default function Dashboard() {
                             />
                           )}
 
-                          {/* Mini Stats Overlay */}
                           {!isDoc && (
                             <div className="absolute bottom-2 right-2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white px-2 py-1 rounded-lg text-xs font-medium">
                               <span className="flex items-center gap-1">
@@ -874,6 +942,10 @@ export default function Dashboard() {
                                   }
                                 />{" "}
                                 {photo.likeCount || 0}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <MessageSquare size={12} />{" "}
+                                {photo.commentCount || 0}
                               </span>
                             </div>
                           )}
@@ -1003,7 +1075,7 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* LIGHTBOX XEM TO (Có chức năng thả tim và bình luận) */}
+      {/* LIGHTBOX XEM TO CÓ BÌNH LUẬN */}
       {viewImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-0 sm:p-8 backdrop-blur-sm"
@@ -1020,7 +1092,6 @@ export default function Dashboard() {
             className="w-full h-full sm:h-[85vh] max-w-6xl bg-black sm:bg-slate-900 sm:rounded-2xl overflow-hidden flex flex-col lg:flex-row shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Cột trái: Hiển thị Ảnh/Video */}
             <div className="flex-1 flex items-center justify-center bg-black relative p-2">
               {isDocumentFile(viewImage) ? (
                 <div className="w-full max-w-md bg-white rounded-2xl flex flex-col items-center justify-center p-8 text-center m-4">
@@ -1052,10 +1123,8 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Cột phải: Khung Bình luận & Tương tác */}
             {!isDocumentFile(viewImage) && (
               <div className="w-full lg:w-96 bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none">
-                {/* Header người đăng & Nút thả tim */}
                 <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                   <p className="font-semibold text-slate-800 truncate max-w-[200px]">
                     {viewImage.name}
@@ -1076,7 +1145,6 @@ export default function Dashboard() {
                   </button>
                 </div>
 
-                {/* Danh sách bình luận */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
                   {comments.length === 0 ? (
                     <p className="text-center text-slate-400 text-sm italic mt-10">
@@ -1084,24 +1152,48 @@ export default function Dashboard() {
                     </p>
                   ) : (
                     comments.map((cmt) => (
-                      <div key={cmt.id} className="flex flex-col">
+                      <div
+                        key={cmt.id}
+                        className="flex flex-col relative group"
+                      >
                         <span className="text-xs font-bold text-slate-700">
                           {cmt.email.split("@")[0]}
                         </span>
-                        <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none w-fit max-w-[90%] mt-1">
+                        <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none w-fit max-w-[90%] mt-1 flex flex-col">
                           <p className="text-sm text-slate-800">
                             {cmt.content}
                           </p>
                         </div>
-                        <span className="text-[10px] text-slate-400 mt-1 ml-1">
-                          {cmt.createdAt?.toDate().toLocaleString("vi-VN")}
-                        </span>
+
+                        <div className="flex items-center gap-3 mt-1 ml-1">
+                          <span className="text-[10px] text-slate-400">
+                            {cmt.createdAt?.toDate().toLocaleString("vi-VN")}
+                          </span>
+                          {(cmt.uid === auth.currentUser?.uid ||
+                            role === "admin") && (
+                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {cmt.uid === auth.currentUser?.uid && (
+                                <button
+                                  onClick={() => handleEditComment(cmt)}
+                                  className="text-[10px] font-medium text-sky-600 hover:underline"
+                                >
+                                  Sửa
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteComment(cmt.id)}
+                                className="text-[10px] font-medium text-rose-600 hover:underline"
+                              >
+                                Xóa
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ))
                   )}
                 </div>
 
-                {/* Ô nhập bình luận */}
                 <div className="p-4 border-t bg-white flex items-center gap-2">
                   <input
                     type="text"
@@ -1127,4 +1219,3 @@ export default function Dashboard() {
     </div>
   );
 }
-// Ep Netlify build lai code moi nhat

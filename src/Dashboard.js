@@ -117,10 +117,15 @@ export default function Dashboard() {
           );
         });
 
-        const notifQuery = query(
-          collection(db, "notifications"),
-          where("allowedUsers", "array-contains", user.uid),
-        );
+        // ĐÃ SỬA LỖI: Nếu là Admin, lấy TOÀN BỘ thông báo trên web. Nếu User, chỉ lấy theo quyền.
+        const notifQuery =
+          currentRole === "admin"
+            ? collection(db, "notifications")
+            : query(
+                collection(db, "notifications"),
+                where("allowedUsers", "array-contains", user.uid),
+              );
+
         const unsubscribeNotifs = onSnapshot(notifQuery, (snapshot) => {
           const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
           const relevant = docs.filter((d) => d.actorUid !== user.uid);
@@ -250,7 +255,6 @@ export default function Dashboard() {
       setReplyingTo(null);
       setExpandedReplies(new Set());
     }
-    // eslint-disable-next-line
   }, [viewImage]);
 
   const handleLogout = async () => {
@@ -912,13 +916,16 @@ export default function Dashboard() {
   ).length;
 
   return (
-    <div className="min-h-screen bg-sky-50 text-slate-900">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
         <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center gap-3">
           <div className="flex items-center gap-2">
             <Image className="text-sky-500 h-7 w-7 hidden sm:block" />
             <h1 className="text-xl sm:text-2xl font-bold text-sky-600">
-              Album<span className="text-rose-400 font-medium">Kỷ Niệm</span>
+              Album
+              <span className="text-rose-400 font-medium">
+                Lưu Trữ - by TVT
+              </span>
             </h1>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
@@ -1075,58 +1082,69 @@ export default function Dashboard() {
               <h3 className="text-lg sm:text-xl font-semibold text-slate-800 mb-4 sm:mb-5">
                 Thư Mục Của Bạn
               </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+                {/* NÂNG CẤP GIAO DIỆN THẺ THƯ MỤC CỰC ĐẸP Ở ĐÂY */}
                 {albums.map((album) => (
                   <div
                     key={album.id}
-                    className="bg-white border-2 border-sky-100 p-3 sm:p-4 rounded-2xl hover:border-sky-300 transition shadow-sm hover:shadow-md group flex flex-col justify-between space-y-3"
+                    className="bg-white border border-slate-200 p-4 sm:p-5 rounded-2xl hover:border-sky-300 transition-all duration-300 shadow-sm hover:shadow-xl group flex flex-col justify-between space-y-4 relative overflow-hidden"
                   >
-                    <div>
-                      <h4
-                        className="text-sm sm:text-lg font-bold text-sky-900 line-clamp-2"
-                        title={album.name}
-                      >
-                        {album.name}
-                      </h4>
-                      <span className="text-[10px] sm:text-xs text-slate-500 block mt-1">
-                        Ngày:{" "}
-                        {album.createdAt?.toDate().toLocaleDateString("vi-VN")}
-                      </span>
+                    <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-sky-400 to-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+
+                    <div className="flex items-start gap-3">
+                      <div className="p-3 bg-sky-50 text-sky-500 rounded-xl group-hover:scale-110 transition-transform shadow-sm">
+                        <FolderKanban size={24} strokeWidth={1.5} />
+                      </div>
+                      <div className="flex-1 mt-1">
+                        <h4
+                          className="text-base sm:text-lg font-bold text-slate-800 line-clamp-2 group-hover:text-sky-600 transition-colors"
+                          title={album.name}
+                        >
+                          {album.name}
+                        </h4>
+                        <span className="text-[10px] sm:text-xs text-slate-400 font-medium block mt-1">
+                          <Activity size={10} className="inline mr-1 mb-0.5" />
+                          {album.createdAt
+                            ?.toDate()
+                            .toLocaleDateString("vi-VN")}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-1.5 sm:gap-2 pt-2 border-t border-sky-50">
+
+                    <div className="flex flex-col gap-2 pt-3 border-t border-slate-100">
                       <button
                         onClick={() => handleSelectAlbum(album)}
-                        className="w-full bg-sky-50 text-sky-700 py-1.5 sm:py-2 rounded-lg font-medium hover:bg-sky-500 hover:text-white transition flex justify-center items-center gap-1.5 sm:gap-2 text-xs sm:text-sm"
+                        className="w-full bg-sky-50 text-sky-600 py-2.5 rounded-xl font-semibold hover:bg-sky-500 hover:text-white transition flex justify-center items-center gap-2 text-xs sm:text-sm shadow-sm"
                       >
-                        <FolderPlus size={14} className="sm:w-4 sm:h-4" />{" "}
-                        <span className="hidden sm:inline">Mở Thư mục</span>
-                        <span className="sm:hidden">Mở</span>
+                        <FolderPlus size={16} /> Mở Thư mục
                       </button>
 
                       {role === "admin" && (
-                        <div className="flex gap-1.5 sm:gap-2 w-full">
+                        <div className="flex gap-2 w-full mt-1">
                           <button
                             onClick={() => handleEditAlbumName(album)}
-                            className="flex-1 text-sky-600 bg-sky-50 sm:bg-transparent py-1.5 rounded-lg font-medium hover:bg-sky-100 transition flex justify-center items-center gap-1 text-[11px] sm:text-xs"
+                            className="flex-1 text-slate-600 bg-slate-50 py-2 rounded-xl font-medium hover:bg-slate-200 transition flex justify-center items-center gap-1.5 text-[11px] sm:text-xs shadow-sm"
                           >
-                            <Edit3 size={14} className="sm:w-3.5 sm:h-3.5" />{" "}
-                            <span className="hidden sm:inline">Sửa tên</span>
+                            <Edit3 size={14} /> Sửa tên
                           </button>
                           <button
                             onClick={() => handleDeleteAlbum(album.id)}
-                            className="flex-1 text-rose-600 bg-rose-50 sm:bg-transparent py-1.5 rounded-lg font-medium hover:bg-rose-100 transition flex justify-center items-center gap-1 text-[11px] sm:text-xs"
+                            className="flex-1 text-rose-600 bg-rose-50 py-2 rounded-xl font-medium hover:bg-rose-100 transition flex justify-center items-center gap-1.5 text-[11px] sm:text-xs shadow-sm"
                           >
-                            <Trash2 size={14} className="sm:w-3.5 sm:h-3.5" />{" "}
-                            <span className="hidden sm:inline">Xóa</span>
+                            <Trash2 size={14} /> Xóa
                           </button>
                         </div>
                       )}
                     </div>
                   </div>
                 ))}
+
                 {albums.length === 0 && (
-                  <div className="col-span-full py-12 text-center text-slate-500 bg-sky-50 rounded-xl text-sm">
-                    Chưa có thư mục nào.
+                  <div className="col-span-full py-16 flex flex-col items-center justify-center text-slate-400 bg-white/50 border border-dashed border-slate-200 rounded-3xl">
+                    <FolderKanban size={48} className="mb-3 text-slate-300" />
+                    <p className="text-sm font-medium">
+                      Chưa có thư mục nào ở đây.
+                    </p>
                   </div>
                 )}
               </div>
@@ -1336,7 +1354,7 @@ export default function Dashboard() {
                             />
                           )}
 
-                          {/* --- CẬP NHẬT: LUÔN HIỂN THỊ HUY HIỆU ĐẾM CHO TẤT CẢ FILE --- */}
+                          {/* Huy hiệu đếm luôn hiển thị (Kể cả cho DOC/LINK) */}
                           <div className="absolute bottom-2 right-2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white px-2 py-1 rounded-lg text-xs font-medium">
                             <span className="flex items-center gap-1">
                               <Heart
@@ -1597,16 +1615,14 @@ export default function Dashboard() {
             </div>
 
             <div className="w-full lg:w-[400px] bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none relative">
-              <div className="p-4 border-b flex justify-between items-center bg-slate-50">
-                <p
-                  className="font-semibold text-slate-800 truncate max-w-[200px]"
-                  title={viewImage.name}
-                >
+              {/* ĐÃ SỬA LỖI TÊN DÀI: flex-start và bo khối lại để tên xuống dòng thoải mái */}
+              <div className="p-4 border-b flex justify-between items-start gap-3 bg-slate-50">
+                <p className="font-semibold text-slate-800 flex-1">
                   {viewImage.name}
                 </p>
                 <button
                   onClick={() => handleLikePhoto(viewImage)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition font-medium ${viewImage.likes?.includes(auth.currentUser?.uid) ? "bg-rose-50 text-rose-500" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  className={`flex-shrink-0 whitespace-nowrap flex items-center gap-2 px-3 py-1.5 rounded-full transition font-medium ${viewImage.likes?.includes(auth.currentUser?.uid) ? "bg-rose-50 text-rose-500" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
                 >
                   <Heart
                     size={18}

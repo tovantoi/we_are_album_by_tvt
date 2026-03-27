@@ -922,10 +922,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-2">
             <Image className="text-sky-500 h-7 w-7 hidden sm:block" />
             <h1 className="text-xl sm:text-2xl font-bold text-sky-600">
-              Album
-              <span className="text-rose-400 font-medium">
-                Lưu Trữ - by TVT
-              </span>
+              Album<span className="text-rose-400 font-medium">Kỷ Niệm</span>
             </h1>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">

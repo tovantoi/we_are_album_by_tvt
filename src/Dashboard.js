@@ -117,7 +117,6 @@ export default function Dashboard() {
           );
         });
 
-        // ĐÃ SỬA LỖI: Nếu là Admin, lấy TOÀN BỘ thông báo trên web. Nếu User, chỉ lấy theo quyền.
         const notifQuery =
           currentRole === "admin"
             ? collection(db, "notifications")
@@ -255,10 +254,22 @@ export default function Dashboard() {
       setReplyingTo(null);
       setExpandedReplies(new Set());
     }
+    // eslint-disable-next-line
   }, [viewImage]);
 
   const handleLogout = async () => {
-    if (auth.currentUser) {
+    const result = await Swal.fire({
+      title: "Đăng xuất?",
+      text: "Bạn có chắc chắn muốn thoát khỏi tài khoản?",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonColor: "#f43f5e",
+      cancelButtonColor: "#94a3b8",
+      confirmButtonText: "Đăng xuất",
+      cancelButtonText: "Hủy",
+    });
+
+    if (result.isConfirmed && auth.currentUser) {
       try {
         await setDoc(
           doc(db, "users", auth.currentUser.uid),
@@ -284,13 +295,13 @@ export default function Dashboard() {
       });
       Swal.fire({
         title: "Thành công!",
-        text: `Đã tạo album "${newAlbumName}"`,
+        text: `Đã tạo thư mục "${newAlbumName}"`,
         icon: "success",
         confirmButtonColor: "#0ea5e9",
       });
       setNewAlbumName("");
     } catch (e) {
-      Swal.fire("Lỗi!", "Không thể tạo album.", "error");
+      Swal.fire("Lỗi!", "Không thể tạo thư mục.", "error");
     }
   };
 
@@ -654,7 +665,7 @@ export default function Dashboard() {
         if (file.size > maxSize) {
           await Swal.fire(
             "Tệp quá nặng!",
-            `Tệp "${file.name}" quá lớn.`,
+            `Tệp "${file.name}" quá lớn (Ảnh <10MB, Video <100MB).`,
             "warning",
           );
           continue;
@@ -917,7 +928,8 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="bg-white shadow-sm sticky top-0 z-10 border-b border-sky-100">
+      {/* HEADER CHÍNH - Z-INDEX 40 để đè lên mọi thứ */}
+      <header className="bg-white/95 backdrop-blur-md shadow-sm sticky top-0 z-[40] border-b border-sky-100">
         <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center gap-3">
           <div className="flex items-center gap-2">
             <Image className="text-sky-500 h-7 w-7 hidden sm:block" />
@@ -1082,27 +1094,32 @@ export default function Dashboard() {
               <h3 className="text-lg sm:text-xl font-semibold text-slate-800 mb-4 sm:mb-5">
                 Thư Mục Của Bạn
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-                {/* NÂNG CẤP GIAO DIỆN THẺ THƯ MỤC CỰC ĐẸP Ở ĐÂY */}
+
+              {/* ĐÃ FIX: CHIA LÀM 2 CỘT TRÊN MOBILE VÀ NÂNG CẤP GIAO DIỆN (grid-cols-2 trên sm) */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
                 {albums.map((album) => (
                   <div
                     key={album.id}
-                    className="bg-white border border-slate-200 p-4 sm:p-5 rounded-2xl hover:border-sky-300 transition-all duration-300 shadow-sm hover:shadow-xl group flex flex-col justify-between space-y-4 relative overflow-hidden"
+                    className="bg-white border border-slate-200 p-3 sm:p-5 rounded-2xl hover:border-sky-300 transition-all duration-300 shadow-sm hover:shadow-xl group flex flex-col justify-between space-y-3 sm:space-y-4 relative overflow-hidden"
                   >
                     <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-sky-400 to-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"></div>
 
-                    <div className="flex items-start gap-3">
-                      <div className="p-3 bg-sky-50 text-sky-500 rounded-xl group-hover:scale-110 transition-transform shadow-sm">
-                        <FolderKanban size={24} strokeWidth={1.5} />
+                    <div className="flex flex-col sm:flex-row items-start gap-2 sm:gap-3">
+                      <div className="p-2 sm:p-3 bg-sky-50 text-sky-500 rounded-lg sm:rounded-xl group-hover:scale-110 transition-transform shadow-sm">
+                        <FolderKanban
+                          size={20}
+                          className="sm:w-6 sm:h-6"
+                          strokeWidth={1.5}
+                        />
                       </div>
                       <div className="flex-1 mt-1">
                         <h4
-                          className="text-base sm:text-lg font-bold text-slate-800 line-clamp-2 group-hover:text-sky-600 transition-colors"
+                          className="text-sm sm:text-lg font-bold text-slate-800 line-clamp-2 group-hover:text-sky-600 transition-colors"
                           title={album.name}
                         >
                           {album.name}
                         </h4>
-                        <span className="text-[10px] sm:text-xs text-slate-400 font-medium block mt-1">
+                        <span className="text-[10px] sm:text-xs text-slate-400 font-medium block mt-0.5 sm:mt-1">
                           <Activity size={10} className="inline mr-1 mb-0.5" />
                           {album.createdAt
                             ?.toDate()
@@ -1111,27 +1128,31 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 pt-3 border-t border-slate-100">
+                    <div className="flex flex-col gap-2 pt-2 sm:pt-3 border-t border-slate-100">
                       <button
                         onClick={() => handleSelectAlbum(album)}
-                        className="w-full bg-sky-50 text-sky-600 py-2.5 rounded-xl font-semibold hover:bg-sky-500 hover:text-white transition flex justify-center items-center gap-2 text-xs sm:text-sm shadow-sm"
+                        className="w-full bg-sky-50 text-sky-600 py-2 sm:py-2.5 rounded-lg sm:rounded-xl font-semibold hover:bg-sky-500 hover:text-white transition flex justify-center items-center gap-1.5 sm:gap-2 text-[11px] sm:text-sm shadow-sm"
                       >
-                        <FolderPlus size={16} /> Mở Thư mục
+                        <FolderPlus size={14} className="sm:w-4 sm:h-4" />{" "}
+                        <span className="hidden sm:inline">Mở Thư mục</span>
+                        <span className="sm:hidden">Mở</span>
                       </button>
 
                       {role === "admin" && (
-                        <div className="flex gap-2 w-full mt-1">
+                        <div className="flex gap-1.5 sm:gap-2 w-full mt-0.5 sm:mt-1">
                           <button
                             onClick={() => handleEditAlbumName(album)}
-                            className="flex-1 text-slate-600 bg-slate-50 py-2 rounded-xl font-medium hover:bg-slate-200 transition flex justify-center items-center gap-1.5 text-[11px] sm:text-xs shadow-sm"
+                            className="flex-1 text-slate-600 bg-slate-50 py-1.5 sm:py-2 rounded-lg sm:rounded-xl font-medium hover:bg-slate-200 transition flex justify-center items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs shadow-sm"
                           >
-                            <Edit3 size={14} /> Sửa tên
+                            <Edit3 size={12} className="sm:w-3.5 sm:h-3.5" />{" "}
+                            Sửa
                           </button>
                           <button
                             onClick={() => handleDeleteAlbum(album.id)}
-                            className="flex-1 text-rose-600 bg-rose-50 py-2 rounded-xl font-medium hover:bg-rose-100 transition flex justify-center items-center gap-1.5 text-[11px] sm:text-xs shadow-sm"
+                            className="flex-1 text-rose-600 bg-rose-50 py-1.5 sm:py-2 rounded-lg sm:rounded-xl font-medium hover:bg-rose-100 transition flex justify-center items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs shadow-sm"
                           >
-                            <Trash2 size={14} /> Xóa
+                            <Trash2 size={12} className="sm:w-3.5 sm:h-3.5" />{" "}
+                            Xóa
                           </button>
                         </div>
                       )}
@@ -1152,25 +1173,27 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
+            {/* ĐÃ FIX: THANH TRỞ VỀ ĐƯỢC TREO (STICKY) Ở ĐỈNH MÀN HÌNH (Z-INDEX 30) */}
+            <div className="sticky top-[58px] sm:top-[72px] z-[30] bg-sky-50/95 backdrop-blur-md py-2.5 sm:py-3 flex flex-row justify-between items-center border-b border-sky-200/60 shadow-sm -mx-4 px-4 sm:mx-0 sm:px-6 sm:rounded-2xl mb-4 sm:mb-6 gap-2">
               <button
                 onClick={() => setSelectedAlbum(null)}
-                className="flex items-center gap-2 text-sky-700 bg-sky-100 px-4 py-2 rounded-full w-full sm:w-fit hover:bg-sky-200 transition font-medium"
+                className="flex shrink-0 items-center gap-1 sm:gap-2 text-sky-700 bg-white/80 border border-sky-100 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full hover:bg-sky-100 transition font-medium text-[11px] sm:text-base shadow-sm"
               >
-                <ChevronLeft size={18} /> Trở về
+                <ChevronLeft size={16} className="sm:w-5 sm:h-5" />{" "}
+                <span className="hidden sm:inline">Trở về</span>
               </button>
 
-              <div className="flex items-center justify-center sm:justify-end gap-2 overflow-hidden w-full sm:w-1/2">
-                <h2 className="text-xl sm:text-2xl font-bold text-sky-950 truncate">
+              <div className="flex items-center justify-center gap-1.5 sm:gap-2 overflow-hidden flex-1">
+                <h2 className="text-xs sm:text-xl font-bold text-sky-950 truncate text-center">
                   {selectedAlbum.name}
                 </h2>
                 {role === "admin" && (
                   <button
                     onClick={() => handleEditAlbumName(selectedAlbum)}
-                    className="text-sky-500 hover:bg-sky-100 p-1.5 rounded-full transition"
+                    className="text-sky-500 hover:bg-sky-200 bg-sky-100/50 p-1 sm:p-1.5 rounded-full transition shrink-0"
                     title="Đổi tên Thư mục"
                   >
-                    <Edit3 size={18} />
+                    <Edit3 size={12} className="sm:w-4 sm:h-4" />
                   </button>
                 )}
               </div>
@@ -1178,14 +1201,14 @@ export default function Dashboard() {
               {canUpload && (
                 <button
                   onClick={() => setIsSelectionMode(!isSelectionMode)}
-                  className={`flex items-center justify-center gap-2 ${isSelectionMode ? "bg-sky-500 text-white" : "bg-sky-100 text-sky-700"} px-4 py-2 rounded-full transition font-medium`}
+                  className={`flex shrink-0 items-center justify-center gap-1 sm:gap-2 ${isSelectionMode ? "bg-sky-500 text-white shadow-sky-500/30" : "bg-white/80 text-sky-700 border-sky-100"} border px-3 py-1.5 sm:px-4 sm:py-2 rounded-full transition font-medium text-[11px] sm:text-base shadow-sm`}
                 >
                   {isSelectionMode ? (
-                    <Check size={18} />
+                    <Check size={16} className="sm:w-5 sm:h-5" />
                   ) : (
-                    <SquareCheck size={18} />
+                    <SquareCheck size={16} className="sm:w-5 sm:h-5" />
                   )}{" "}
-                  Chọn nhiều
+                  <span className="hidden sm:inline">Chọn nhiều</span>
                 </button>
               )}
             </div>
@@ -1354,7 +1377,6 @@ export default function Dashboard() {
                             />
                           )}
 
-                          {/* Huy hiệu đếm luôn hiển thị (Kể cả cho DOC/LINK) */}
                           <div className="absolute bottom-2 right-2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white px-2 py-1 rounded-lg text-xs font-medium">
                             <span className="flex items-center gap-1">
                               <Heart
@@ -1512,17 +1534,17 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* LIGHTBOX XEM TO */}
+      {/* LIGHTBOX XEM TO (ĐÃ SỬA NÚT X ĐỂ LUÔN NHÌN RÕ) */}
       {viewImage && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-0 sm:p-8 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-0 sm:p-8 backdrop-blur-sm"
           onClick={() => setViewImage(null)}
         >
           <button
             onClick={() => setViewImage(null)}
-            className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition z-50"
+            className="absolute top-4 right-4 text-white hover:text-rose-300 bg-black/50 hover:bg-black/80 p-2 sm:p-2.5 rounded-full transition z-[70] backdrop-blur-md border border-white/20 shadow-xl"
           >
-            <X size={24} className="sm:w-7 sm:h-7" />
+            <X size={24} className="sm:w-6 sm:h-6" />
           </button>
 
           <div
@@ -1586,7 +1608,7 @@ export default function Dashboard() {
               ) : isPdfFile(viewImage) ? (
                 <div className="flex flex-col items-center justify-center w-full h-full p-4 relative">
                   <img
-                    src={viewImage.imageUrl.replace(/\.pdf$/i, ".jpg")}
+                    src={viewImage.imageUrl.replace(/\.pdf(\?|$)/i, ".jpg$1")}
                     alt={viewImage.name}
                     className="max-w-full max-h-[60vh] object-contain shadow-xl bg-white mb-4 rounded-lg"
                   />
@@ -1615,7 +1637,6 @@ export default function Dashboard() {
             </div>
 
             <div className="w-full lg:w-[400px] bg-white flex flex-col h-[50vh] lg:h-full rounded-t-2xl sm:rounded-none relative">
-              {/* ĐÃ SỬA LỖI TÊN DÀI: flex-start và bo khối lại để tên xuống dòng thoải mái */}
               <div className="p-4 border-b flex justify-between items-start gap-3 bg-slate-50">
                 <p className="font-semibold text-slate-800 flex-1">
                   {viewImage.name}

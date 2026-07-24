@@ -179,6 +179,14 @@ export default function Dashboard() {
   const isVideoFile = (photo) =>
     photo?.mediaType === "video" ||
     (photo?.imageUrl && photo.imageUrl.match(/\.(mp4|mov|avi|webm)(\?|$)/i));
+
+  // --- BỔ SUNG THÊM HÀM NÀY ---
+  const isAudioFile = (photo) =>
+    photo?.mediaType === "audio" ||
+    (photo?.imageUrl &&
+      photo.imageUrl.match(/\.(mp3|wav|ogg|m4a|flac)(\?|$)/i));
+  // ----------------------------
+
   const isPdfFile = (photo) =>
     photo?.imageUrl &&
     photo.imageUrl.match(/\.pdf(\?|$)/i) &&
@@ -855,8 +863,15 @@ export default function Dashboard() {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      const extension = photo.mediaType === "video" ? ".mp4" : ".jpg";
-      let finalName = photo.name || "ky-niem";
+
+      let extension = ".jpg";
+      if (photo.mediaType === "video" || isVideoFile(photo)) {
+        extension = ".mp4";
+      } else if (photo.mediaType === "audio" || isAudioFile(photo)) {
+        extension = ".mp3";
+      }
+
+      let finalName = photo.name || "am-thanh";
       if (!finalName.toLowerCase().endsWith(extension)) finalName += extension;
       link.download = finalName;
       document.body.appendChild(link);
@@ -1269,7 +1284,7 @@ export default function Dashboard() {
                           id="file-upload"
                           type="file"
                           multiple
-                          accept="image/*, video/*, .mp4, .mov, .mkv, .avi, .pdf, .doc, .docx, .xls, .xlsx, .txt, .heic, .heif"
+                          accept="image/*, video/*, audio/*, .mp3, .wav, .m4a, .mp4, .mov, .mkv, .avi, .pdf, .doc, .docx, .xls, .xlsx, .txt, .heic, .heif"
                           onChange={(e) => setImageUploads(e.target.files)}
                           className="flex-1 text-xs sm:text-sm text-emerald-700 file:mr-2 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-xl file:border-0 file:bg-emerald-100 hover:file:bg-emerald-200 cursor-pointer w-full"
                         />
@@ -1310,6 +1325,7 @@ export default function Dashboard() {
                     const isDoc = isOtherDocFile(photo);
                     const isPdf = isPdfFile(photo);
                     const isLink = isLinkFile(photo);
+                    const isAudio = isAudioFile(photo);
                     const isSelected = selectedPhotos.has(photo.id);
 
                     const docInfo = isDoc ? getDocIconInfo(photo) : null;
@@ -1364,7 +1380,18 @@ export default function Dashboard() {
                               />
                               <PlayCircle className="absolute inset-0 m-auto text-white w-12 h-12 opacity-80 group-hover:opacity-100 shadow-sm" />
                             </>
+                          ) : isAudio ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-amber-50 text-amber-500 group-hover:bg-amber-100 transition p-3 text-center">
+                              <PlayCircle
+                                size={44}
+                                className="mb-2 opacity-80 group-hover:scale-110 transition-transform"
+                              />
+                              <span className="text-[10px] font-bold bg-white/60 px-2 py-0.5 rounded-full shadow-sm">
+                                AUDIO / MP3
+                              </span>
+                            </div>
                           ) : (
+                            // ----------------------------------------------------
                             <img
                               src={
                                 isPdf
@@ -1413,7 +1440,9 @@ export default function Dashboard() {
                                   ? "Mở/Tải tài liệu"
                                   : isLink
                                     ? "Mở Link"
-                                    : "Tải về"
+                                    : isAudio
+                                      ? "Nghe/Tải âm thanh"
+                                      : "Tải về"
                               }
                             >
                               {isLink ? (
@@ -1426,7 +1455,9 @@ export default function Dashboard() {
                                   ? "Mở file"
                                   : isLink
                                     ? "Mở"
-                                    : "Tải"}
+                                    : isAudio
+                                      ? "Nghe"
+                                      : "Tải"}
                               </span>
                             </button>
                             {canEditThisPhoto && (
@@ -1619,7 +1650,34 @@ export default function Dashboard() {
                     <FileText size={18} /> Mở toàn bộ tệp PDF
                   </button>
                 </div>
-              ) : isVideoFile(viewImage) ? (
+              ) : isAudioFile(viewImage) ? (
+                <div className="w-full max-w-md bg-white rounded-3xl flex flex-col items-center justify-center p-6 text-center m-4 shadow-xl border border-slate-100">
+                  <div className="p-5 bg-amber-50 rounded-full mb-4 animate-pulse text-amber-500">
+                    <PlayCircle size={64} strokeWidth={1.5} />
+                  </div>
+                  <span className="px-3 py-1 text-xs font-bold rounded-full mb-3 bg-amber-50 text-amber-600 border border-amber-200">
+                    ĐANG PHÁT ÂM THANH
+                  </span>
+                  <h3 className="text-lg font-bold text-slate-800 mb-6 px-4 line-clamp-2">
+                    {viewImage.name}
+                  </h3>
+
+                  {/* Trình phát Audio HTML5 chuẩn */}
+                  <audio
+                    src={viewImage.imageUrl}
+                    controls
+                    autoPlay
+                    className="w-full mb-4 accent-amber-500"
+                  />
+
+                  <p className="text-xs text-slate-400 italic">
+                    Tự động phát khi mở. Bạn có thể tùy chỉnh âm lượng hoặc tua
+                    nhanh.
+                  </p>
+                </div>
+              ) : // ---------------------------------------
+
+              isVideoFile(viewImage) ? (
                 <video
                   src={viewImage.imageUrl}
                   controls
